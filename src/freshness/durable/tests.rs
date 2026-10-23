@@ -350,6 +350,9 @@ fn crash_helper() {
         [99_u64.to_be_bytes().as_slice()],
     )
     .unwrap();
+    // Force uncommitted dirty pages through SQLite's pager to exercise hot-journal recovery.
+    tx.cache_flush().unwrap();
+    assert!(Path::new(&path).join("admission.sqlite3-journal").is_file());
     // Skip all Rust destructors, including transaction rollback and file-lock release.
     // Recovery in the next process must use SQLite's hot journal and OS lock cleanup.
     std::process::exit(0);
@@ -374,6 +377,7 @@ fn crash_recovery_preserves_commits_and_rolls_back_incomplete_transactions() {
         output.status.success(),
         "crash helper failed; details omitted"
     );
+    assert!(d.path().join("admission.sqlite3-journal").is_file());
     f.session = SessionId([3; 16]);
     let mut s = DurableAdmission::open(d.path(), f.gate(), 1).unwrap();
     assert_eq!(s.clock(), 1);
