@@ -148,3 +148,14 @@ fn invalid_identity_profile_is_rejected_without_accessing_credentials() {
             .contains("Identity profile must contain")
     );
 }
+
+#[test]
+fn signed_envelope_probe_needs_no_graphical_session_or_credential_store() {
+    let output = cli(&["envelope-probe"]);
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("Tampering and duplicate delivery rejected")
+    );
+}
