@@ -144,3 +144,20 @@ observes the native NSPasteboard changeCount (metadata polling; no text polling)
 Watchers stay on their creating thread and stop at the requested deadline.
 Missing Wayland data-control returns an explicit error without XWayland fallback.
 Own-write suppression and network synchronization follow separately.
+
+## Local clipboard session prototype
+
+`ClipboardSession` joins native notifications with text validation. It emits new
+local text observations and provides `apply_received_text` for future network
+messages. Applying text adds a random per-session origin marker in a separate
+clipboard format, allowing the session to suppress its own writes. Copying the
+same text normally (without that marker) remains a new local observation.
+Startup contents are neither read nor emitted, and markers/text are never logged.
+
+This marker is local loop prevention, not a network identity or authorization
+proof. Apps that preserve custom clipboard formats can preserve it too; interaction
+with clipboard managers still needs dedicated tests. Native reads and marker
+queries do not yet have a uniform end-to-end timeout or allocation bound. The X11
+tagged writer uses clipboard-rs; ordinary reads/writes continue to use the existing
+adapter. There is no network, pairing, Idle handling, or persistent clipboard data
+in this prototype.
