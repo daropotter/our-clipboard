@@ -7,14 +7,20 @@ description = "Clipboard sharing between trusted computers"
 repository = "https://github.com/daropotter/our-clipboard"
 
 [features]
-default = ["clipboard"]
+default = ["clipboard", "os-keyring"]
 clipboard = ["dep:arboard", "dep:clipboard-rs", "dep:wayland-client", "dep:wayland-protocols", "dep:wayland-protocols-wlr", "dep:wl-clipboard-rs", "dep:x11rb", "dep:zbus", "dep:clipboard-win", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation"]
+os-keyring = ["dep:keyring"]
 
 [dependencies]
 arboard = { version = "3.7.0", default-features = false, optional = true }
+directories = "6"
 getrandom = "0.3"
+keyring = { version = "4", optional = true }
 rcgen = { version = "0.14", default-features = false, features = ["ring"] }
+ring = "0.17.14"
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+tempfile = "3"
+zeroize = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 clipboard-rs = { version = "0.3.5", default-features = false, optional = true }

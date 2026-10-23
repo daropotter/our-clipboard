@@ -107,3 +107,33 @@ jobs:
             -v "$PWD/target/debug/examples:/examples:ro" \
             -v "$PWD/tests/linux/run-sync.sh:/run-sync.sh:ro" \
             our-clipboard-tests bash /run-sync.sh /examples/synthetic-clipboard-sync
+  native-identity:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked --no-default-features --features os-keyring --test identity_store -- --ignored --test-threads=1
+  linux-identity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked --no-default-features --features os-keyring --tests
+      - run: docker build -t our-clipboard-keyring-tests -f tests/identity/Dockerfile .
+      - name: Persistent identity through private Secret Service
+        shell: bash
+        run: |
+          binary=$(find target/debug/deps -maxdepth 1 -type f -executable -name 'identity_store-*' -print -quit)
+          test -n "$binary"
+          docker run --rm --network none \
+            -e OUR_CLIPBOARD_TEST_CLI=/our-clipboard \
+            -v "$PWD/target/debug/our-clipboard:/our-clipboard:ro" \
+            -v "$PWD/target/debug/deps:/tests:ro" \
+            -v "$PWD/tests/identity/run.sh:/run-tests.sh:ro" \
+            our-clipboard-keyring-tests bash /run-tests.sh "/tests/$(basename "$binary")"

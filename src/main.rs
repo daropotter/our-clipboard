@@ -35,6 +35,14 @@ Commands:
 
 Clipboard integration is disabled. Synchronization is not implemented yet.";
 
+fn help() -> String {
+    let mut text = HELP.to_owned();
+    if cfg!(feature = "os-keyring") {
+        text.push_str("\n\nIdentity (system credential store):\n  identity init [--profile name]\n  identity show [--profile name]");
+    }
+    text
+}
+
 fn run(args: &[String]) -> Result<String, &'static str> {
     match args
         .iter()
@@ -42,7 +50,7 @@ fn run(args: &[String]) -> Result<String, &'static str> {
         .collect::<Vec<_>>()
         .as_slice()
     {
-        [] | ["help"] | ["--help"] | ["-h"] => Ok(HELP.into()),
+        [] | ["help"] | ["--help"] | ["-h"] => Ok(help()),
         ["--version"] | ["-V"] => Ok(format!("our-clipboard {}", env!("CARGO_PKG_VERSION"))),
         #[cfg(feature = "clipboard")]
         ["clipboard-probe", "--replace-clipboard"] => clipboard_probe(),
@@ -50,6 +58,14 @@ fn run(args: &[String]) -> Result<String, &'static str> {
         ["watch-probe", "--observe-clipboard", seconds] => watch_probe(seconds),
         #[cfg(feature = "clipboard")]
         ["doctor", "--clipboard"] => clipboard_doctor(),
+        #[cfg(feature = "os-keyring")]
+        ["identity", action @ ("init" | "show")] => {
+            our_clipboard::identity::manage(action, "default").map_err(|error| error.message())
+        }
+        #[cfg(feature = "os-keyring")]
+        ["identity", action @ ("init" | "show"), "--profile", profile] => {
+            our_clipboard::identity::manage(action, profile).map_err(|error| error.message())
+        }
         ["transport-probe"] => our_clipboard::transport::probe(),
         ["doctor"] => Ok(format!(
             "OS: {}\nArchitecture: {}\nSynchronization: not implemented",

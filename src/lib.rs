@@ -2,6 +2,7 @@
 pub mod clipboard;
 #[cfg(all(feature = "clipboard", target_os = "linux"))]
 mod gnome;
+pub mod identity;
 #[cfg(feature = "clipboard")]
 mod origin;
 #[cfg(feature = "clipboard")]
