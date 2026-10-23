@@ -271,6 +271,10 @@ name = "our-clipboard"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "rustix",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
  "wl-clipboard-rs",
  "x11rb",
 ]

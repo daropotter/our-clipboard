@@ -10,5 +10,9 @@ repository = "https://github.com/daropotter/our-clipboard"
 arboard = { version = "3.7.0", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1.5", features = ["event"] }
+wayland-client = "0.31.15"
+wayland-protocols = { version = "0.32.13", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
 wl-clipboard-rs = "0.9.4"
 x11rb = { version = "0.13.2", features = ["xfixes"] }
