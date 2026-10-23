@@ -7,6 +7,8 @@ Usage: our-clipboard <COMMAND>
 
 Commands:
   doctor      Report runtime platform information
+  doctor --clipboard
+              Initialize the clipboard backend without reading or writing text
   clipboard-probe --replace-clipboard
               Replace the clipboard with synthetic text and verify access
   help        Show this help
@@ -24,6 +26,7 @@ fn run(args: &[String]) -> Result<String, &'static str> {
         [] | ["help"] | ["--help"] | ["-h"] => Ok(HELP.into()),
         ["--version"] | ["-V"] => Ok(format!("our-clipboard {}", env!("CARGO_PKG_VERSION"))),
         ["clipboard-probe", "--replace-clipboard"] => clipboard_probe(),
+        ["doctor", "--clipboard"] => clipboard_doctor(),
         ["doctor"] => Ok(format!(
             "OS: {}\nArchitecture: {}\nSynchronization: not implemented",
             std::env::consts::OS,
@@ -31,6 +34,16 @@ fn run(args: &[String]) -> Result<String, &'static str> {
         )),
         _ => Err("Unknown command or unexpected arguments. Run 'our-clipboard help'."),
     }
+}
+
+fn clipboard_doctor() -> Result<String, &'static str> {
+    let clipboard = TextClipboard::new()?;
+    Ok(format!(
+        "OS: {}\nArchitecture: {}\nClipboard backend: {}\nBackend initialization: passed\nRead/write verification: not performed\nSynchronization: not implemented",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        clipboard.backend_name()
+    ))
 }
 
 fn clipboard_probe() -> Result<String, &'static str> {
