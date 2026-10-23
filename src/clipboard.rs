@@ -64,6 +64,7 @@ impl TextClipboard {
     }
 
     pub fn set_text(&mut self, text: &str) -> Result<(), &'static str> {
+        crate::text::validate(text).map_err(|error| error.message())?;
         match &mut self.backend {
             Backend::Native(clipboard) => clipboard
                 .set_text(text)
@@ -82,19 +83,17 @@ impl TextClipboard {
     pub fn get_text(&mut self) -> Result<String, &'static str> {
         match &mut self.backend {
             Backend::Native(clipboard) => {
-                clipboard.get_text().map_err(|_| "Clipboard read failed.")
+                let text = clipboard.get_text().map_err(|_| "Clipboard read failed.")?;
+                crate::text::validate(&text).map_err(|error| error.message())?;
+                Ok(text)
             }
             #[cfg(target_os = "linux")]
             Backend::Wayland => {
-                use std::io::Read;
                 use wl_clipboard_rs::paste::{ClipboardType, MimeType, Seat, get_contents};
-                let (mut pipe, _) =
+                let (pipe, _) =
                     get_contents(ClipboardType::Regular, Seat::Unspecified, MimeType::Text)
                         .map_err(|_| "Clipboard read failed.")?;
-                let mut text = String::new();
-                pipe.read_to_string(&mut text)
-                    .map_err(|_| "Clipboard read failed.")?;
-                Ok(text)
+                crate::text::read_bounded(pipe).map_err(|error| error.message())
             }
         }
     }

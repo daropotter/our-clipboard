@@ -35,3 +35,20 @@ fn clipboard_reader() {
     // Avoid assert_eq!, which would expose actual clipboard contents on failure.
     assert!(observed == SAMPLE, "clipboard contents differ (omitted)");
 }
+
+#[test]
+#[ignore = "replaces the clipboard; requires a disposable graphical session"]
+fn invalid_writes_leave_existing_clipboard_unchanged() {
+    let mut clipboard =
+        our_clipboard::clipboard::TextClipboard::new().expect("clipboard backend unavailable");
+    clipboard.set_text(SAMPLE).expect("clipboard write failed");
+    let oversized = "x".repeat(our_clipboard::text::MAX_TEXT_BYTES + 1);
+    for invalid in ["", "before\0after", oversized.as_str()] {
+        assert!(clipboard.set_text(invalid).is_err());
+        let observed = clipboard.get_text().expect("clipboard read failed");
+        assert!(
+            observed == SAMPLE,
+            "rejected write changed clipboard (omitted)"
+        );
+    }
+}
