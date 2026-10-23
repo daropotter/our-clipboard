@@ -93,6 +93,19 @@ Run its API-mocked regression tests with Node.js 22 or newer:
 node --test .github/scripts/*.test.cjs
 ```
 
+## Text validation
+
+The shared clipboard adapter accepts at most **10,000,000 UTF-8 bytes** per text
+value. Empty strings, embedded NUL, and invalid UTF-8 are rejected. Whitespace,
+line endings, and Unicode composition are preserved. Invalid writes are rejected
+before touching the native clipboard; rejecting a write never clears it.
+
+Wayland pipe reads stop after the limit plus one byte and reject oversize content
+without truncation. The current Windows/macOS/X11 library allocates native reads
+before validation, so its read allocation is not yet bounded by this limit.
+Blocking-owner timeouts and notification handling remain future work. These rules
+prepare clipboard access; network synchronization is not implemented yet.
+
 ## License
 
 [MIT](LICENSE), copyright 2026 Dariusz Wojciechowski.
