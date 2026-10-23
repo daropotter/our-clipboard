@@ -1,20 +1,35 @@
 //! Content-free native clipboard notifications. Observing a change never reads text.
-use std::time::{Duration, Instant};
+use std::{
+    marker::PhantomData,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 #[cfg(target_os = "linux")]
 mod wayland;
 #[cfg(target_os = "linux")]
 mod x11;
 
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
+
 pub struct Watcher {
-    #[cfg(target_os = "linux")]
     backend: Backend,
+    // Native message windows/pasteboards must stay on the creating thread.
+    _thread_bound: PhantomData<Rc<()>>,
 }
 
-#[cfg(target_os = "linux")]
 enum Backend {
+    #[cfg(target_os = "linux")]
     X11(Box<x11::Watcher>),
+    #[cfg(target_os = "linux")]
     Wayland(Box<wayland::Watcher>),
+    #[cfg(target_os = "windows")]
+    Windows(windows::Watcher),
+    #[cfg(target_os = "macos")]
+    Macos(macos::Watcher),
 }
 
 impl Watcher {
@@ -26,24 +41,43 @@ impl Watcher {
             {
                 return Ok(Self {
                     backend: Backend::Wayland(Box::new(wayland::Watcher::new()?)),
+                    _thread_bound: PhantomData,
                 });
             }
             Ok(Self {
                 backend: Backend::X11(Box::new(x11::Watcher::new()?)),
+                _thread_bound: PhantomData,
             })
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        {
+            Ok(Self {
+                backend: Backend::Windows(windows::Watcher::new()?),
+                _thread_bound: PhantomData,
+            })
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Ok(Self {
+                backend: Backend::Macos(macos::Watcher::new()),
+                _thread_bound: PhantomData,
+            })
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         Err("Native clipboard notifications are not implemented on this platform yet.")
     }
 
     pub fn backend_name(&self) -> &'static str {
-        #[cfg(target_os = "linux")]
         match &self.backend {
+            #[cfg(target_os = "linux")]
             Backend::X11(_) => "X11 XFixes",
+            #[cfg(target_os = "linux")]
             Backend::Wayland(watcher) => watcher.backend_name(),
+            #[cfg(target_os = "windows")]
+            Backend::Windows(_) => "Windows WM_CLIPBOARDUPDATE",
+            #[cfg(target_os = "macos")]
+            Backend::Macos(_) => "macOS NSPasteboard.changeCount",
         }
-        #[cfg(not(target_os = "linux"))]
-        "Unsupported"
     }
 
     /// Wait for a native selection change, bounded by a local deadline.
@@ -51,10 +85,15 @@ impl Watcher {
     pub fn wait(&mut self, timeout: Duration) -> Result<bool, &'static str> {
         let deadline = Instant::now() + timeout;
         loop {
-            #[cfg(target_os = "linux")]
             if match &mut self.backend {
+                #[cfg(target_os = "linux")]
                 Backend::X11(w) => w.changed()?,
+                #[cfg(target_os = "linux")]
                 Backend::Wayland(w) => w.changed()?,
+                #[cfg(target_os = "windows")]
+                Backend::Windows(w) => w.changed()?,
+                #[cfg(target_os = "macos")]
+                Backend::Macos(w) => w.changed(),
             } {
                 return Ok(true);
             }

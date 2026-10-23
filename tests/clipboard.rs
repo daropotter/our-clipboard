@@ -78,7 +78,6 @@ fn clipboard_doctor_reports_backend_without_changing_contents() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 #[ignore = "writes synthetic text; requires a disposable graphical session"]
 fn native_watch_reports_changes_without_exposing_text() {
     use std::io::{BufRead, BufReader};
@@ -121,7 +120,7 @@ fn native_watch_reports_changes_without_exposing_text() {
     assert!(ready.starts_with("Watching: "));
     // A conscious copy of identical text must still be a separate native change.
     clipboard.set_text(SAMPLE).unwrap();
-    std::thread::sleep(Duration::from_millis(100));
+    std::thread::sleep(Duration::from_millis(300));
     clipboard.set_text(SAMPLE).unwrap();
     let summary = receive
         .recv_timeout(Duration::from_secs(4))

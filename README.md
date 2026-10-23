@@ -139,6 +139,8 @@ On Wayland, ext-data-control is preferred, with wlr-data-control as fallback.
 The initial compositor selection is consumed as a baseline, PRIMARY is ignored,
 and offered MIME metadata is discarded without requesting payloads. The observer
 uses the first advertised seat; hotplug/reselection needs further coverage.
-Missing data-control and other platforms return explicit errors without an
-XWayland fallback. Own-write suppression, other platform watchers, and network
-synchronization follow separately.
+Windows uses a message-only window subscribed to WM_CLIPBOARDUPDATE. macOS
+observes the native NSPasteboard changeCount (metadata polling; no text polling).
+Watchers stay on their creating thread and stop at the requested deadline.
+Missing Wayland data-control returns an explicit error without XWayland fallback.
+Own-write suppression and network synchronization follow separately.
