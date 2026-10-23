@@ -88,19 +88,6 @@ fn native_watch_reports_changes_without_exposing_text() {
 
     let executable = std::env::var_os("OUR_CLIPBOARD_TEST_CLI")
         .unwrap_or_else(|| env!("CARGO_BIN_EXE_our-clipboard").into());
-    if std::env::var_os("XDG_SESSION_TYPE").is_some_and(|s| s == "wayland") {
-        let output = Command::new(executable)
-            .args(["watch-probe", "--observe-clipboard", "1"])
-            .output()
-            .unwrap();
-        assert!(!output.status.success());
-        assert!(
-            String::from_utf8(output.stderr)
-                .unwrap()
-                .contains("XWayland fallback is disabled")
-        );
-        return;
-    }
     // Seed a baseline before subscription: starting the observer must not emit it.
     let mut clipboard = our_clipboard::clipboard::TextClipboard::new().unwrap();
     clipboard.set_text(SAMPLE).unwrap();
@@ -131,9 +118,10 @@ fn native_watch_reports_changes_without_exposing_text() {
     let ready = receive
         .recv_timeout(Duration::from_secs(3))
         .expect("watcher did not become ready");
-    assert!(ready.starts_with("Watching: X11 XFixes"));
+    assert!(ready.starts_with("Watching: "));
     // A conscious copy of identical text must still be a separate native change.
     clipboard.set_text(SAMPLE).unwrap();
+    std::thread::sleep(Duration::from_millis(100));
     clipboard.set_text(SAMPLE).unwrap();
     let summary = receive
         .recv_timeout(Duration::from_secs(4))

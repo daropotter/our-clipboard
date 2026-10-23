@@ -129,12 +129,16 @@ prepare clipboard access; network synchronization is not implemented yet.
 cargo run -- watch-probe --observe-clipboard 10
 ```
 
-The bounded probe subscribes to X11 XFixes notifications for CLIPBOARD and reports
+The bounded probe subscribes to native X11 XFixes or Wayland data-control notifications and reports
 only their count. It never reads clipboard contents, ignores PRIMARY, and does
 not emit the selection already present at startup. Repeated copies of identical
 text count as separate native changes. Selection clears and owner exits may also
 produce notifications; a notification is not yet a publishable text event.
 
-This increment supports X11 only. Wayland and other systems return an explicit
-unsupported error, without an XWayland fallback. Own-write suppression, native
-watchers on other platforms, and network synchronization follow separately.
+On Wayland, ext-data-control is preferred, with wlr-data-control as fallback.
+The initial compositor selection is consumed as a baseline, PRIMARY is ignored,
+and offered MIME metadata is discarded without requesting payloads. The observer
+uses the first advertised seat; hotplug/reselection needs further coverage.
+Missing data-control and other platforms return explicit errors without an
+XWayland fallback. Own-write suppression, other platform watchers, and network
+synchronization follow separately.
