@@ -52,3 +52,27 @@ fn invalid_writes_leave_existing_clipboard_unchanged() {
         );
     }
 }
+
+#[test]
+#[ignore = "seeds synthetic text; requires a disposable graphical session"]
+fn clipboard_doctor_reports_backend_without_changing_contents() {
+    let mut clipboard =
+        our_clipboard::clipboard::TextClipboard::new().expect("clipboard backend unavailable");
+    clipboard.set_text(SAMPLE).expect("clipboard write failed");
+    let executable = std::env::var_os("OUR_CLIPBOARD_TEST_CLI")
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_our-clipboard").into());
+    let output = Command::new(executable)
+        .args(["doctor", "--clipboard"])
+        .output()
+        .expect("doctor process failed to start");
+    assert!(output.status.success(), "clipboard doctor failed");
+    let report = String::from_utf8(output.stdout).unwrap();
+    assert!(report.contains(clipboard.backend_name()));
+    assert!(report.contains("Read/write verification: not performed"));
+    assert!(!report.contains(SAMPLE), "doctor exposed clipboard text");
+    let observed = clipboard.get_text().expect("clipboard read failed");
+    assert!(
+        observed == SAMPLE,
+        "doctor changed clipboard contents (omitted)"
+    );
+}

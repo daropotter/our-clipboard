@@ -42,6 +42,7 @@ fn invalid_commands_fail_without_claiming_success() {
         vec!["clipboard-probe"],
         vec!["relay"],
         vec!["doctor", "unexpected"],
+        vec!["doctor", "--clipboard", "unexpected"],
     ] {
         let output = cli(&args);
         assert_eq!(output.status.code(), Some(2));
@@ -88,5 +89,26 @@ fn unavailable_wayland_does_not_fall_back_to_x11() {
         String::from_utf8(output.stderr)
             .unwrap()
             .contains("XWayland fallback is disabled")
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn clipboard_doctor_reports_unavailable_without_a_session() {
+    let output = Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
+        .args(["doctor", "--clipboard"])
+        .env_remove("XDG_SESSION_TYPE")
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("WAYLAND_SOCKET")
+        .env_remove("DISPLAY")
+        .env("XDG_RUNTIME_DIR", "/nonexistent-our-clipboard-test-session")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("Clipboard unavailable")
     );
 }

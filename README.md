@@ -23,6 +23,7 @@ Install stable Rust, then run:
 ```sh
 cargo run -- --help
 cargo run -- doctor
+cargo run -- doctor --clipboard
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
@@ -38,6 +39,15 @@ After the initial repository commit, changes go through pull requests. Each pull
 request must provide a working increment and pass its checks. Pending increments
 may be stacked, with each pull request targeting the preceding branch. Review and
 merge the stack from the bottom up, retargeting dependent pull requests as needed.
+
+## Clipboard diagnostics
+
+`cargo run -- doctor --clipboard` initializes the selected native clipboard
+backend and reports its name without reading or writing clipboard contents.
+It exits with an error when initialization fails, including missing native
+Wayland data-control access. Successful initialization is not proof of read/write
+permission, notifications, or synchronization. Use the explicit synthetic probe
+below in a disposable session for a read/write check.
 
 ## Clipboard access prototype
 
