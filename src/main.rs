@@ -1,6 +1,8 @@
+#[cfg(feature = "clipboard")]
 use our_clipboard::clipboard::TextClipboard;
 use std::process::ExitCode;
 
+#[cfg(feature = "clipboard")]
 const HELP: &str = "Our Clipboard — early development
 
 Usage: our-clipboard <COMMAND>
@@ -13,10 +15,25 @@ Commands:
               Replace the clipboard with synthetic text and verify access
   watch-probe --observe-clipboard <seconds>
               Count native clipboard notifications without reading text (1-60 seconds)
+  transport-probe
+              Check synthetic mutual TLS over direct and relayed loopback connections
   help        Show this help
   --version   Show version
 
 Clipboard synchronization is not implemented yet.";
+
+#[cfg(not(feature = "clipboard"))]
+const HELP: &str = "Our Clipboard — headless transport prototype
+
+Usage: our-clipboard <COMMAND>
+
+Commands:
+  doctor           Report runtime platform information
+  transport-probe  Check synthetic mutual TLS over direct and relayed loopback connections
+  help             Show this help
+  --version        Show version
+
+Clipboard integration is disabled. Synchronization is not implemented yet.";
 
 fn run(args: &[String]) -> Result<String, &'static str> {
     match args
@@ -27,9 +44,13 @@ fn run(args: &[String]) -> Result<String, &'static str> {
     {
         [] | ["help"] | ["--help"] | ["-h"] => Ok(HELP.into()),
         ["--version"] | ["-V"] => Ok(format!("our-clipboard {}", env!("CARGO_PKG_VERSION"))),
+        #[cfg(feature = "clipboard")]
         ["clipboard-probe", "--replace-clipboard"] => clipboard_probe(),
+        #[cfg(feature = "clipboard")]
         ["watch-probe", "--observe-clipboard", seconds] => watch_probe(seconds),
+        #[cfg(feature = "clipboard")]
         ["doctor", "--clipboard"] => clipboard_doctor(),
+        ["transport-probe"] => our_clipboard::transport::probe(),
         ["doctor"] => Ok(format!(
             "OS: {}\nArchitecture: {}\nSynchronization: not implemented",
             std::env::consts::OS,
@@ -39,6 +60,7 @@ fn run(args: &[String]) -> Result<String, &'static str> {
     }
 }
 
+#[cfg(feature = "clipboard")]
 fn watch_probe(seconds: &str) -> Result<String, &'static str> {
     use std::{
         io::Write,
@@ -69,6 +91,7 @@ fn watch_probe(seconds: &str) -> Result<String, &'static str> {
     ))
 }
 
+#[cfg(feature = "clipboard")]
 fn clipboard_doctor() -> Result<String, &'static str> {
     let clipboard = TextClipboard::new()?;
     Ok(format!(
@@ -79,6 +102,7 @@ fn clipboard_doctor() -> Result<String, &'static str> {
     ))
 }
 
+#[cfg(feature = "clipboard")]
 fn clipboard_probe() -> Result<String, &'static str> {
     // Never read the user's old clipboard or include backend errors in logs.
     let mut clipboard = TextClipboard::new()?;

@@ -164,6 +164,32 @@ tagged writer uses clipboard-rs; ordinary reads/writes continue to use the exist
 adapter. There is no network, pairing, Idle handling, or persistent clipboard data
 in this prototype.
 
+## Synthetic TLS transport prototype
+
+```sh
+cargo run -- transport-probe
+cargo run --no-default-features -- transport-probe
+cargo test --locked --no-default-features
+```
+
+The probe creates ephemeral Ed25519 test identities and exchanges synthetic text
+between mutually authenticated TLS 1.3 endpoints over loopback, directly and
+through a blind TCP forwarder. Both endpoints reject untrusted peer certificates.
+The forwarder never terminates TLS or receives endpoint keys; its bounded byte
+capture is test instrumentation, not a clipboard log. Keys and payloads are not
+printed or written to files.
+
+Connections (including handshake/partial I/O) and accepts have fixed three-second
+deadlines. Experimental framing validates text length before allocating payloads.
+`--no-default-features` builds the transport without clipboard, display or GNOME
+adapter dependencies; no graphical session is required.
+
+This is not a deployed relay or the final wire protocol. It does not implement
+pairing, membership, discovery, NAT traversal, QUIC, UDP-blocked fallback,
+reconnection or cross-device clipboard synchronization. The loopback probe checks
+TLS behavior and a forwarding path; it does not establish Internet reachability
+or select the final transport architecture.
+
 ## License
 
 [MIT](LICENSE), copyright 2026 Daro Potter.
