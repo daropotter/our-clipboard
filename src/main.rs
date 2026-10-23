@@ -83,10 +83,8 @@ fn clipboard_probe() -> Result<String, &'static str> {
     // Never read the user's old clipboard or include backend errors in logs.
     let mut clipboard = TextClipboard::new()?;
     let text = "Our Clipboard synthetic probe\nZażółć gęślą jaźń 🦀";
-    clipboard
-        .set_text(text)
-        .map_err(|_| "Clipboard write failed.")?;
-    let observed = clipboard.get_text().map_err(|_| "Clipboard read failed.")?;
+    clipboard.set_text(text)?;
+    let observed = clipboard.get_text()?;
     if observed != text {
         return Err("Clipboard verification failed; contents are omitted.");
     }

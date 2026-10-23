@@ -117,7 +117,8 @@ impl TextClipboard {
                             }
                             _ => "Clipboard read failed.",
                         })?;
-                crate::text::read_bounded(pipe).map_err(|error| error.message())
+                crate::text::read_bounded_fd(pipe, std::time::Duration::from_secs(2))
+                    .map_err(|error| error.message())
             }
         }
     }

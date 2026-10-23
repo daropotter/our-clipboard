@@ -62,7 +62,6 @@ impl TaggedClipboard {
                 Ok(observed.as_slice() == marker)
             }
             Self::Wayland => {
-                use std::io::Read;
                 use wl_clipboard_rs::paste::{ClipboardType, Error, MimeType, Seat, get_contents};
                 let (pipe, _) = match get_contents(
                     ClipboardType::Regular,
@@ -73,10 +72,15 @@ impl TaggedClipboard {
                     Err(Error::ClipboardEmpty | Error::NoMimeType) => return Ok(false),
                     Err(_) => return Err(FAILED),
                 };
-                let mut observed = Vec::new();
-                pipe.take(33)
-                    .read_to_end(&mut observed)
-                    .map_err(|_| FAILED)?;
+                let observed = match crate::text::read_bytes_bounded_fd(
+                    pipe,
+                    32,
+                    std::time::Duration::from_secs(1),
+                ) {
+                    Ok(bytes) => bytes,
+                    Err(crate::text::TextError::TooLarge) => return Ok(false),
+                    Err(_) => return Err(FAILED),
+                };
                 Ok(observed.as_slice() == marker)
             }
         }

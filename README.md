@@ -117,12 +117,13 @@ before touching the native clipboard; rejecting a write never clears it.
 Wayland pipe reads stop after the limit plus one byte and reject oversize content
 without truncation. The current Windows/macOS/X11 library allocates native reads
 before validation, so its read allocation is not yet bounded by this limit.
-Blocking-owner timeouts and notification handling remain future work. These rules
-prepare clipboard access; network synchronization is not implemented yet.
+Wayland payload pipes have a fixed two-second read deadline; origin-marker pipes
+have a one-second deadline and a 32-byte limit. A stalled or incomplete transfer
+fails without returning partial text, and progress does not renew the deadline.
+Compositor negotiation before obtaining a pipe and other native blocking calls
+are outside these deadlines. Uniform operation cancellation and native allocation
+limits remain future work. Network synchronization is not implemented yet.
 
-## License
-
-[MIT](LICENSE), copyright 2026 Daro Potter.
 
 ## Native notification probe
 
@@ -162,3 +163,7 @@ queries do not yet have a uniform end-to-end timeout or allocation bound. The X1
 tagged writer uses clipboard-rs; ordinary reads/writes continue to use the existing
 adapter. There is no network, pairing, Idle handling, or persistent clipboard data
 in this prototype.
+
+## License
+
+[MIT](LICENSE), copyright 2026 Daro Potter.
