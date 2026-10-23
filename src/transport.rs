@@ -6,7 +6,7 @@ use rustls::{
 use std::{
     io::{Read, Write},
     net::{Shutdown, SocketAddr, TcpListener, TcpStream},
-    sync::{Arc, Mutex, mpsc},
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -129,38 +129,79 @@ fn receive_text(stream: &mut impl Read) -> Result<String> {
     Ok(text)
 }
 
-/// A bounded prototype connection has a total deadline, including handshake and slow partial I/O.
-struct SocketDeadline {
-    cancel: mpsc::Sender<()>,
-    worker: Option<thread::JoinHandle<()>>,
+/// Nonblocking I/O retries share one absolute deadline on every supported OS.
+struct DeadlineStream {
+    socket: TcpStream,
+    deadline: Instant,
 }
-impl SocketDeadline {
-    fn new(socket: &TcpStream) -> Result<Self> {
+impl DeadlineStream {
+    fn new(socket: TcpStream) -> Result<Self> {
         Self::with_timeout(socket, DEADLINE)
     }
-    fn with_timeout(socket: &TcpStream, timeout: Duration) -> Result<Self> {
-        let socket = socket.try_clone().map_err(io_error)?;
-        let (cancel, receive) = mpsc::channel();
-        let worker = thread::Builder::new()
-            .name("transport-deadline".into())
-            .spawn(move || {
-                if receive.recv_timeout(timeout).is_err() {
-                    let _ = socket.shutdown(Shutdown::Both);
-                }
-            })
-            .map_err(|_| Error::Worker)?;
+    fn with_timeout(socket: TcpStream, timeout: Duration) -> Result<Self> {
+        socket.set_nonblocking(true).map_err(io_error)?;
         Ok(Self {
-            cancel,
-            worker: Some(worker),
+            socket,
+            deadline: Instant::now() + timeout,
         })
     }
-}
-impl Drop for SocketDeadline {
-    fn drop(&mut self) {
-        let _ = self.cancel.send(());
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+    fn check(&self) -> std::io::Result<()> {
+        if Instant::now() >= self.deadline {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "transport deadline exceeded",
+            ))
+        } else {
+            Ok(())
         }
+    }
+    fn pause(&self) {
+        thread::sleep(
+            Duration::from_millis(2).min(self.deadline.saturating_duration_since(Instant::now())),
+        );
+    }
+    fn shutdown(&self, direction: Shutdown) -> std::io::Result<()> {
+        self.socket.shutdown(direction)
+    }
+}
+impl Read for DeadlineStream {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            self.check()?;
+            match self.socket.read(bytes) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    self.pause()
+                }
+                result => return result,
+            }
+        }
+    }
+}
+impl Write for DeadlineStream {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        loop {
+            self.check()?;
+            match self.socket.write(bytes) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    self.pause()
+                }
+                result => return result,
+            }
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.check()?;
+        self.socket.flush()
     }
 }
 fn accept(listener: &TcpListener) -> Result<TcpStream> {
@@ -179,8 +220,7 @@ fn accept(listener: &TcpListener) -> Result<TcpStream> {
     }
 }
 fn server(listener: TcpListener, config: Arc<ServerConfig>) -> Result<()> {
-    let mut socket = accept(&listener)?;
-    let _deadline = SocketDeadline::new(&socket)?;
+    let mut socket = DeadlineStream::new(accept(&listener)?)?;
     let mut connection = ServerConnection::new(config).map_err(|_| Error::Setup)?;
     while connection.is_handshaking() {
         connection.complete_io(&mut socket).map_err(io_error)?;
@@ -196,12 +236,16 @@ fn server(listener: TcpListener, config: Arc<ServerConfig>) -> Result<()> {
     send_text(&mut stream, SAMPLE)?;
     stream.conn.send_close_notify();
     stream.flush().map_err(io_error)?;
+    let mut trailing = [0; 1];
+    if stream.read(&mut trailing).map_err(io_error)? != 0 {
+        return Err(Error::Frame);
+    }
     let _ = stream.sock.shutdown(Shutdown::Write);
     Ok(())
 }
 fn client(address: SocketAddr, config: Arc<ClientConfig>) -> Result<()> {
-    let mut socket = TcpStream::connect_timeout(&address, DEADLINE).map_err(io_error)?;
-    let _deadline = SocketDeadline::new(&socket)?;
+    let mut socket =
+        DeadlineStream::new(TcpStream::connect_timeout(&address, DEADLINE).map_err(io_error)?)?;
     let name = "localhost".try_into().map_err(|_| Error::Setup)?;
     let mut connection = ClientConnection::new(config, name).map_err(|_| Error::Setup)?;
     while connection.is_handshaking() {
@@ -218,10 +262,16 @@ fn client(address: SocketAddr, config: Arc<ClientConfig>) -> Result<()> {
     }
     stream.conn.send_close_notify();
     stream.flush().map_err(io_error)?;
+    let mut trailing = [0; 1];
+    if stream.read(&mut trailing).map_err(io_error)? != 0 {
+        return Err(Error::Frame);
+    }
     let _ = stream.sock.shutdown(Shutdown::Write);
     Ok(())
 }
-fn pump(mut from: TcpStream, mut to: TcpStream, capture: Arc<Mutex<Vec<u8>>>) -> Result<()> {
+fn pump(from: TcpStream, to: TcpStream, capture: Arc<Mutex<Vec<u8>>>) -> Result<()> {
+    let mut from = DeadlineStream::new(from)?;
+    let mut to = DeadlineStream::new(to)?;
     let mut chunk = [0; 8192];
     loop {
         let count = from.read(&mut chunk).map_err(io_error)?;
@@ -248,8 +298,6 @@ fn relay(
 ) -> Result<()> {
     let incoming = accept(&listener)?;
     let outgoing = TcpStream::connect_timeout(&destination, DEADLINE).map_err(io_error)?;
-    let _incoming_deadline = SocketDeadline::new(&incoming)?;
-    let _outgoing_deadline = SocketDeadline::new(&outgoing)?;
     let upstream_from = incoming.try_clone().map_err(io_error)?;
     let upstream_to = outgoing.try_clone().map_err(io_error)?;
     let upstream_capture = capture.clone();
@@ -377,9 +425,9 @@ mod tests {
     #[test]
     fn total_connection_deadline_interrupts_a_stalled_socket() {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (_server, _) = listener.accept().unwrap();
-        let _deadline = SocketDeadline::with_timeout(&client, Duration::from_millis(50)).unwrap();
+        let mut client = DeadlineStream::with_timeout(client, Duration::from_millis(50)).unwrap();
         let mut byte = [0; 1];
         assert!(
             !matches!(client.read(&mut byte), Ok(1)),
