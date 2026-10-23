@@ -111,4 +111,4 @@ prepare clipboard access; network synchronization is not implemented yet.
 
 ## License
 
-[MIT](LICENSE), copyright 2026 Dariusz Wojciechowski.
+[MIT](LICENSE), copyright 2026 Daro Potter.
