@@ -56,7 +56,7 @@ fn invalid_commands_fail_without_claiming_success() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "clipboard", target_os = "linux"))]
 fn clipboard_probe_fails_clearly_without_a_graphical_session() {
     let output = Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
         .args(["clipboard-probe", "--replace-clipboard"])
@@ -77,7 +77,7 @@ fn clipboard_probe_fails_clearly_without_a_graphical_session() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "clipboard", target_os = "linux"))]
 fn unavailable_wayland_does_not_fall_back_to_x11() {
     let output = Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
         .args(["clipboard-probe", "--replace-clipboard"])
@@ -97,7 +97,7 @@ fn unavailable_wayland_does_not_fall_back_to_x11() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "clipboard", target_os = "linux"))]
 fn clipboard_doctor_reports_unavailable_without_a_session() {
     let output = Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
         .args(["doctor", "--clipboard"])
@@ -115,4 +115,23 @@ fn clipboard_doctor_reports_unavailable_without_a_session() {
             .unwrap()
             .contains("Clipboard unavailable")
     );
+}
+
+#[test]
+fn synthetic_transport_probe_runs_without_a_graphical_session() {
+    let output = Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
+        .arg("transport-probe")
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("WAYLAND_SOCKET")
+        .env_remove("XDG_SESSION_TYPE")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "transport probe failed (details omitted)"
+    );
+    let report = String::from_utf8(output.stdout).unwrap();
+    assert!(report.contains("Untrusted peers rejected on both sides"));
+    assert!(report.contains("Synthetic data only"));
 }

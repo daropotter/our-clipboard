@@ -6,24 +6,30 @@ license = "MIT"
 description = "Clipboard sharing between trusted computers"
 repository = "https://github.com/daropotter/our-clipboard"
 
+[features]
+default = ["clipboard"]
+clipboard = ["dep:arboard", "dep:clipboard-rs", "dep:wayland-client", "dep:wayland-protocols", "dep:wayland-protocols-wlr", "dep:wl-clipboard-rs", "dep:x11rb", "dep:zbus", "dep:clipboard-win", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation"]
+
 [dependencies]
-arboard = { version = "3.7.0", default-features = false }
+arboard = { version = "3.7.0", default-features = false, optional = true }
 getrandom = "0.3"
+rcgen = { version = "0.14", default-features = false, features = ["ring"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-clipboard-rs = { version = "0.3.5", default-features = false }
+clipboard-rs = { version = "0.3.5", default-features = false, optional = true }
 rustix = { version = "1.1.5", features = ["event"] }
-wayland-client = "0.31.15"
-wayland-protocols = { version = "0.32.13", features = ["client", "staging"] }
-wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
-wl-clipboard-rs = "0.9.4"
-x11rb = { version = "0.13.2", features = ["xfixes"] }
-zbus = { version = "5", features = ["blocking-api"] }
+wayland-client = { version = "0.31.15", optional = true }
+wayland-protocols = { version = "0.32.13", features = ["client", "staging"], optional = true }
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"], optional = true }
+wl-clipboard-rs = { version = "0.9.4", optional = true }
+x11rb = { version = "0.13.2", features = ["xfixes"], optional = true }
+zbus = { version = "5", features = ["blocking-api"], optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-clipboard-win = { version = "5.4.3", features = ["monitor"] }
+clipboard-win = { version = "5.4.3", features = ["monitor"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSPasteboard"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData", "NSString"] }
+objc2 = { version = "0.6.5", optional = true }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSPasteboard"], optional = true }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData", "NSString"], optional = true }

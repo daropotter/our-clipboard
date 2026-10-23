@@ -1,3 +1,4 @@
+#![cfg(feature = "clipboard")]
 //! Explicitly opt in only inside a disposable graphical session.
 use std::process::Command;
 
