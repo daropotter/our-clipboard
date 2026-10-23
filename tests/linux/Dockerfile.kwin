@@ -1,0 +1,9 @@
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    kwin-wayland qt6-wayland dbus-daemon libgcc-s1 \
+    && rm -rf /var/lib/apt/lists/*
+# Avoid a file capability requiring elevated container permissions.
+RUN setcap -r /usr/bin/kwin_wayland
+RUN useradd --create-home tester
+USER tester
+WORKDIR /tmp
