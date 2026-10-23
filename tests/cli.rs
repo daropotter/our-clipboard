@@ -170,3 +170,14 @@ fn freshness_probe_needs_no_display_or_credential_store() {
             .contains("UTC-independent age checks passed")
     );
 }
+
+#[test]
+fn durable_probe_uses_temporary_state_without_display_or_keyring() {
+    let output = cli(&["state-probe"]);
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("reservations survived restart")
+    );
+}

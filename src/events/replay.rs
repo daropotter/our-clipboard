@@ -14,7 +14,9 @@ pub enum ReplayDecision {
     Duplicate,
     RetiredSequence,
 }
+#[derive(Clone)]
 struct State {
+    active: bool,
     binding: SessionBinding,
     sequence: u64,
     lamport: u64,
@@ -22,6 +24,7 @@ struct State {
 }
 /// Watermarks are never evicted when the small digest cache expires or capacity fills.
 /// Restore authenticated session/replay state or establish fresh sessions after restart.
+#[derive(Clone)]
 pub struct ReplayGuard {
     capacity: usize,
     states: HashMap<([u8; 32], DeviceId), State>,
@@ -33,6 +36,33 @@ impl ReplayGuard {
             states: HashMap::new(),
         }
     }
+    pub(crate) fn watermarks(&self) -> impl Iterator<Item = (SessionBinding, u64, u64)> + '_ {
+        self.states
+            .values()
+            .map(|s| (s.binding, s.sequence, s.lamport))
+    }
+    pub(crate) fn restore_watermark(
+        &mut self,
+        binding: SessionBinding,
+        sequence: u64,
+        lamport: u64,
+    ) -> Result<(), EventError> {
+        let key = (binding.group, binding.source);
+        if self.states.len() >= self.capacity || self.states.contains_key(&key) {
+            return Err(EventError::Capacity);
+        }
+        self.states.insert(
+            key,
+            State {
+                active: false,
+                binding,
+                sequence,
+                lamport,
+                recent: VecDeque::new(),
+            },
+        );
+        Ok(())
+    }
     /// Only the authenticated handshake/membership layer may call this, never an event.
     /// Re-activating the current session does not reset its watermark.
     pub fn activate_authenticated_session(
@@ -42,6 +72,7 @@ impl ReplayGuard {
         let key = (binding.group, binding.source);
         if let Some(state) = self.states.get_mut(&key) {
             if state.binding.session == binding.session {
+                state.active = true;
                 state.binding.membership = binding.membership;
                 return Ok(());
             }
@@ -52,6 +83,7 @@ impl ReplayGuard {
         self.states.insert(
             key,
             State {
+                active: true,
                 binding,
                 sequence: 0,
                 lamport: previous_lamport,
@@ -66,6 +98,9 @@ impl ReplayGuard {
             .states
             .get(&(context.group, event.source()))
             .ok_or(EventError::UnknownSession)?;
+        if !state.active {
+            return Err(EventError::UnknownSession);
+        }
         if context.session != state.binding.session {
             return Err(EventError::RetiredSession);
         }

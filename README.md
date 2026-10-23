@@ -283,9 +283,8 @@ session does not reset its watermark. Older sequences outside the digest cache
 are retired, not falsely classified as known identical duplicates.
 
 This is a protocol foundation: signature/replay checks do not establish freshness,
-membership rights, handshake freshness or application acknowledgements. Replay
-state is in memory; production restart handling must restore trusted state or
-establish fresh sessions and enforce the new-session boundary. Signed Unix time
+membership rights, handshake freshness or application acknowledgements. The base replay guard is in memory; the durable admission wrapper below
+restores watermarks and requires fresh receiver sessions after restart. Signed Unix time
 is metadata, not sufficient evidence of age. The signed boot-time timestamp is
 used for the suspend-aware freshness checks below. The existing
 TLS/clipboard fixtures retain their separate experimental framing for now.
@@ -325,10 +324,52 @@ Overflow fails without partial mutation. Only winner metadata is retained, with
 no clipboard history. Logical selection is not a clipboard-write acknowledgement:
 the actuator must separately track successful application and retries.
 
-Replay/Lamport state is still in memory. Durable watermarks, authenticated startup
-seeding, pairing/membership, clock negotiation and the actual transport/clipboard
+The base admission object is in memory; the durable wrapper below persists its
+watermarks. Pairing/membership, clock negotiation and the actual transport/clipboard
 admission pipeline remain to be integrated. The current TLS fixtures retain their
 experimental framing and do not exercise this new admission pipeline end to end.
+
+## Durable admission metadata
+
+```sh
+cargo run --no-default-features -- state-probe
+```
+
+The probe uses temporary metadata and synthetic identities. It never opens the
+user's keyring or clipboard. Library callers can use `DurableAdmission` with a
+dedicated private directory and a fresh authenticated `ReceiverSession`.
+`initialize` explicitly creates a new store; `open` requires an existing valid
+store and never silently recreates missing/corrupt/unsupported state. Use one
+store per local device and group, with a fixed source capacity of 1–1024. Capacity
+changes and recovery/reset policy are not implemented.
+
+Bundled SQLite stores the local publication sequence/Lamport watermark, source
+session/membership and sequence/Lamport watermarks, and the selected winner's
+order/hash. No clipboard text, event body or private signing key is stored.
+Transactions use rollback journaling and `synchronous=EXTRA`; an OS file lock
+allows one owning process. Unsigned counters use fixed eight-byte blobs, covering
+the complete u64 range. Reservations commit before signing/sending, so a crash
+can create a gap but cannot reuse a returned number. Received decisions commit
+before being returned; failed commits leave the in-memory state unchanged and
+block further mutations until reopening.
+
+Reopening requires a different receiver session and new clock estimates/quiet
+period. Persisted source sessions remain inactive until explicitly reauthenticated.
+Watermarks survive both restart and authenticated source session changes. Recent
+duplicate hashes are intentionally memory-only: after restart, an already-seen
+sequence is retired rather than acknowledged as an identical applied event.
+Winner selection does not certify clipboard application or provide payload replay;
+an actuator must track writes and acknowledgements separately.
+
+The caller must provide a trusted, persistent local directory (0700 on Unix;
+Windows uses inherited account ACLs) and retain the lock/database/journal files
+together. This protects against process interruption and write failures subject
+to the filesystem's sync/locking guarantees, not malicious rollback, deleted
+metadata, hardware power-loss certification, network filesystems or an attacker
+with access to the account. Startup must not catch `open` errors and automatically
+fall back to `initialize`. Tests exercise actual child-process exit with an open
+transaction, reopen, replay retention, write failure, scope/version validation,
+capacity and counter exhaustion. Production transport integration remains pending.
 
 ## License
 
