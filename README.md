@@ -39,10 +39,6 @@ request must provide a working increment and pass its checks. Pending increments
 may be stacked, with each pull request targeting the preceding branch. Review and
 merge the stack from the bottom up, retargeting dependent pull requests as needed.
 
-## License
-
-[MIT](LICENSE), copyright 2026 Dariusz Wojciechowski.
-
 ## Clipboard access prototype
 
 ```sh
@@ -109,3 +105,7 @@ without truncation. The current Windows/macOS/X11 library allocates native reads
 before validation, so its read allocation is not yet bounded by this limit.
 Blocking-owner timeouts and notification handling remain future work. These rules
 prepare clipboard access; network synchronization is not implemented yet.
+
+## License
+
+[MIT](LICENSE), copyright 2026 Dariusz Wojciechowski.
