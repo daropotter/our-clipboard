@@ -260,6 +260,36 @@ the host keyring is not touched by the container test. The synthetic transport
 fixtures still use ephemeral test identities; persistent signing identity is not
 connected to a production pairing/client protocol yet.
 
+## Signed text event prototype
+
+```sh
+cargo run --no-default-features -- envelope-probe
+```
+
+Canonical versioned envelopes bind group, membership revision, source identity,
+source session, sequence, Lamport clock, creation timestamps, original TTL and
+UTF-8 text under a domain-separated Ed25519 signature. The full envelope hash
+includes its signature; forwarding preserves canonical bytes and never renews
+TTL. Decoding checks type/length/context and rejects trailing bytes before copying
+text. Content and private keys are never logged or exposed through Debug.
+
+Verification requires a source key from already trusted membership; keys are not
+self-authorized by appearing in a message. Only a verified envelope can reach the
+replay guard, and only an authenticated handshake layer may activate a source
+session. The guard rejects old sessions/membership contexts, detects recent ID
+conflicts, retains sequence/Lamport watermarks after digest-cache eviction, and
+fails on capacity exhaustion without evicting protection. Re-activating the same
+session does not reset its watermark. Older sequences outside the digest cache
+are retired, not falsely classified as known identical duplicates.
+
+This is a protocol foundation: signature/replay checks do not establish freshness,
+membership rights, handshake freshness or application acknowledgements. Replay
+state is in memory; production restart handling must restore trusted state or
+establish fresh sessions and enforce the new-session boundary. Signed Unix time
+is metadata, not sufficient evidence of age. The signed boot-time timestamp is
+reserved for suspend-aware freshness checks in the next increment. The existing
+TLS/clipboard fixtures retain their separate experimental framing for now.
+
 ## License
 
 [MIT](LICENSE), copyright 2026 Daro Potter.

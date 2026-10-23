@@ -1,5 +1,6 @@
 #[cfg(feature = "clipboard")]
 pub mod clipboard;
+pub mod events;
 #[cfg(all(feature = "clipboard", target_os = "linux"))]
 mod gnome;
 pub mod identity;
