@@ -183,3 +183,22 @@ fn received_writes_are_not_reemitted_but_same_text_local_copies_are() {
         "invalid application changed clipboard"
     );
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+#[ignore = "requires a disposable graphical session, including GNOME for adapter isolation"]
+fn unavailable_display_never_uses_another_gnome_session() {
+    let executable = std::env::var_os("OUR_CLIPBOARD_TEST_CLI")
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_our-clipboard").into());
+    let output = Command::new(executable)
+        .args(["doctor", "--clipboard"])
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env("WAYLAND_DISPLAY", "our-clipboard-nonexistent-socket")
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "adapter escaped into a different session"
+    );
+    assert!(output.stdout.is_empty());
+}

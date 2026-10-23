@@ -1,0 +1,8 @@
+{
+  "uuid": "our-clipboard@daropotter",
+  "name": "Our Clipboard Adapter",
+  "description": "Local plain-text clipboard access for Our Clipboard on GNOME Wayland.",
+  "shell-version": ["46"],
+  "version": 1,
+  "url": "https://github.com/daropotter/our-clipboard"
+}

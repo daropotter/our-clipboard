@@ -12,6 +12,8 @@ enum Backend {
     Native(arboard::Clipboard),
     #[cfg(target_os = "linux")]
     Wayland,
+    #[cfg(target_os = "linux")]
+    Gnome(crate::gnome::Adapter),
 }
 
 impl TextClipboard {
@@ -24,9 +26,16 @@ impl TextClipboard {
         )? {
             LinuxSession::Wayland => {
                 // Validates compositor/data-control access without reading clipboard contents.
-                wl_clipboard_rs::utils::is_primary_selection_supported().map_err(|_| {
-                    "Native Wayland clipboard unavailable. A data-control protocol or desktop adapter is required; XWayland fallback is disabled."
-                })?;
+                if wl_clipboard_rs::utils::is_primary_selection_supported().is_err() {
+                    if let Ok(adapter) = crate::gnome::Adapter::new() {
+                        return Ok(Self {
+                            backend: Backend::Gnome(adapter),
+                        });
+                    }
+                    return Err(
+                        "Native Wayland clipboard unavailable. A data-control protocol or GNOME Shell adapter is required; XWayland fallback is disabled.",
+                    );
+                }
                 return Ok(Self {
                     backend: Backend::Wayland,
                 });
@@ -42,6 +51,8 @@ impl TextClipboard {
         match self.backend {
             #[cfg(target_os = "linux")]
             Backend::Wayland => "Wayland data-control",
+            #[cfg(target_os = "linux")]
+            Backend::Gnome(_) => "GNOME Shell adapter",
             Backend::Native(_) => {
                 #[cfg(target_os = "linux")]
                 {
@@ -66,6 +77,8 @@ impl TextClipboard {
     pub fn set_text(&mut self, text: &str) -> Result<(), &'static str> {
         crate::text::validate(text).map_err(|error| error.message())?;
         match &mut self.backend {
+            #[cfg(target_os = "linux")]
+            Backend::Gnome(adapter) => adapter.set_text(text),
             Backend::Native(clipboard) => clipboard
                 .set_text(text)
                 .map_err(|_| "Clipboard write failed."),
@@ -82,6 +95,8 @@ impl TextClipboard {
 
     pub fn get_text(&mut self) -> Result<String, &'static str> {
         match &mut self.backend {
+            #[cfg(target_os = "linux")]
+            Backend::Gnome(adapter) => adapter.get_text(),
             Backend::Native(clipboard) => {
                 let text = clipboard.get_text().map_err(|error| match error {
                     arboard::Error::ContentNotAvailable => crate::text::TextError::Empty.message(),

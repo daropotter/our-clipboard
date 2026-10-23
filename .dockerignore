@@ -3,3 +3,4 @@
 !tests/linux/
 !tests/linux/Dockerfile
 !tests/linux/Dockerfile.kwin
+!tests/linux/Dockerfile.gnome
