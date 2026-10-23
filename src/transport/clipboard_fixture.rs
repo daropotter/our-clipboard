@@ -1,7 +1,10 @@
 //! Controlled integration fixture, not a user-facing synchronization daemon or pairing protocol.
 use super::*;
 use crate::{clipboard::TextClipboard, session::ClipboardSession};
-use std::process::{Child, Command, Stdio};
+use std::{
+    process::{Child, Command, Stdio},
+    sync::mpsc,
+};
 const RESPONSE: &str = "Synthetic reply from the second clipboard 🦀\nWith another line";
 const REQUEST_APPLIED: &str = "synthetic request applied";
 const TARGET_VERIFIED: &str = "synthetic target independently verified";
@@ -85,6 +88,13 @@ fn receiver() -> Result<()> {
     raw.set_text("Preexisting synthetic receiver clipboard")
         .map_err(|_| Error::Worker)?;
     let mut session = ClipboardSession::new().map_err(|_| Error::Worker)?;
+    if session
+        .next_local_text(Duration::from_millis(100))
+        .map_err(|_| Error::Worker)?
+        .is_some()
+    {
+        return Err(Error::Frame);
+    }
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).map_err(io_error)?;
     std::io::stdout()
         .write_all(
@@ -96,8 +106,7 @@ fn receiver() -> Result<()> {
         )
         .map_err(io_error)?;
     send_certificate(&mut std::io::stdout(), &identity.cert)?;
-    let mut socket = accept(&listener)?;
-    let _deadline = SocketDeadline::new(&socket)?;
+    let mut socket = DeadlineStream::new(accept(&listener)?)?;
     let mut connection = ServerConnection::new(config).map_err(|_| Error::Setup)?;
     while connection.is_handshaking() {
         connection.complete_io(&mut socket).map_err(io_error)?;
@@ -145,6 +154,10 @@ fn receiver() -> Result<()> {
     }
     stream.conn.send_close_notify();
     stream.flush().map_err(io_error)?;
+    let mut trailing = [0; 1];
+    if stream.read(&mut trailing).map_err(io_error)? != 0 {
+        return Err(Error::Frame);
+    }
     let _ = stream.sock.shutdown(Shutdown::Write);
     Ok(())
 }
@@ -188,8 +201,8 @@ fn controller() -> Result<()> {
     let (port, certificate) = config.map_err(|_| Error::Worker)??;
     let config = client_config(&identity, &certificate)?;
     let address = SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
-    let mut socket = TcpStream::connect_timeout(&address, DEADLINE).map_err(io_error)?;
-    let _deadline = SocketDeadline::new(&socket)?;
+    let mut socket =
+        DeadlineStream::new(TcpStream::connect_timeout(&address, DEADLINE).map_err(io_error)?)?;
     let mut connection =
         ClientConnection::new(config, "localhost".try_into().map_err(|_| Error::Setup)?)
             .map_err(|_| Error::Setup)?;
@@ -240,6 +253,10 @@ fn controller() -> Result<()> {
     send_text(&mut stream, RESPONSE_APPLIED)?;
     stream.conn.send_close_notify();
     stream.flush().map_err(io_error)?;
+    let mut trailing = [0; 1];
+    if stream.read(&mut trailing).map_err(io_error)? != 0 {
+        return Err(Error::Frame);
+    }
     let _ = stream.sock.shutdown(Shutdown::Write);
     wait(&mut child.0)
 }

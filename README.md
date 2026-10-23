@@ -190,6 +190,36 @@ reconnection or cross-device clipboard synchronization. The loopback probe check
 TLS behavior and a forwarding path; it does not establish Internet reachability
 or select the final transport architecture.
 
+## Two-clipboard integration fixture
+
+CI also runs `synthetic-clipboard-sync` in a private container with two independent
+Xvfb servers. Separate sender/receiver processes exchange newly observed synthetic
+text in both directions over mutual TLS. Third processes read each destination
+clipboard independently before the corresponding applied acknowledgement is sent
+or accepted. Own-write notifications must not cause an echo, and preexisting
+synthetic baseline contents must not be emitted.
+
+The fixture exchanges only public test certificates through anonymous parent/child
+pipes; private keys stay in their generating processes. It requires explicit
+`--replace-clipboard` consent and two disposable X11 displays. It is an example/test
+helper, not an installed client command, a pairing protocol, or a persistent daemon.
+
+To reproduce in the isolated environment:
+
+```sh
+cargo build --locked --example synthetic-clipboard-sync
+docker build -t our-clipboard-tests -f tests/linux/Dockerfile .
+docker run --rm --network none \
+  -v "$PWD/target/debug/examples:/examples:ro" \
+  -v "$PWD/tests/linux/run-sync.sh:/run-sync.sh:ro" \
+  our-clipboard-tests bash /run-sync.sh /examples/synthetic-clipboard-sync
+```
+
+This proves the clipboard/observer/TLS/application path for controlled X11
+sessions. It does not provide production session stabilization, pairing,
+membership, TTL/freshness, reconnect behavior, multi-hop delivery or cross-platform
+end-to-end certification. Those remain explicit next increments.
+
 ## License
 
 [MIT](LICENSE), copyright 2026 Daro Potter.
