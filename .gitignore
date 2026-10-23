@@ -1,0 +1,5 @@
+/target/
+/ZALOZENIA.md
+.env
+.env.*
+!.env.example
