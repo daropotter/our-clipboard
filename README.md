@@ -63,8 +63,8 @@ On X11/Wayland, clipboard ownership may end when the process exits.
 The prototype uses `arboard` for Windows/macOS/X11 and `wl-clipboard-rs`
 for native Wayland data-control. Wayland sessions never silently fall back to
 XWayland. The probe reports the backend used after successful verification. It requires
-a graphical session and its permissions. GNOME Wayland without a compatible
-data-control protocol needs a separate adapter; it is not supported by this probe.
+a graphical session and its permissions. GNOME Wayland without compatible data-control can use the explicitly installed
+[GNOME Shell 46 adapter prototype](gnome/README.md).
 
 Opt-in integration tests write synthetic multiline Unicode in one process and
 verify it in a second process while the clipboard owner remains alive:
@@ -77,7 +77,8 @@ CI runs these tests in disposable Windows/macOS runners, Xvfb, headless Sway,
 and KWin 6 with a virtual output. The KWin environment uses Debian 13 and
 software rendering, with no XWayland, physical GPU, or host clipboard access.
 This tests native clipboard data-control, not a full Plasma desktop session.
-Normal `cargo test` skips these destructive graphical tests explicitly. GNOME,
+A separate headless GNOME Shell 46 job tests the extension adapter without XWayland.
+Normal `cargo test` skips these destructive graphical tests explicitly.
 permission denial, notifications, lock/unlock, and suspend/resume still
 need dedicated coverage before platform support can be claimed. Runner tests do
 not certify desktop OS releases.

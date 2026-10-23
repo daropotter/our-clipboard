@@ -4,10 +4,14 @@ use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext};
 pub enum TaggedClipboard {
     X11(ClipboardContext),
     Wayland,
+    Gnome(crate::gnome::Adapter),
 }
 
 impl TaggedClipboard {
     pub fn new(backend: &str) -> Result<Self, &'static str> {
+        if backend == "GNOME Shell adapter" {
+            return crate::gnome::Adapter::new().map(Self::Gnome);
+        }
         if backend == "Wayland data-control" {
             Ok(Self::Wayland)
         } else {
@@ -17,6 +21,7 @@ impl TaggedClipboard {
 
     pub fn apply(&mut self, text: &str, marker: &[u8; 32]) -> Result<(), &'static str> {
         match self {
+            Self::Gnome(adapter) => adapter.apply(text, marker),
             Self::X11(context) => context
                 .set(vec![
                     ClipboardContent::Other(FORMAT.into(), marker.to_vec()),
@@ -43,6 +48,7 @@ impl TaggedClipboard {
 
     pub fn is_own(&mut self, marker: &[u8; 32]) -> Result<bool, &'static str> {
         match self {
+            Self::Gnome(adapter) => adapter.is_own(marker),
             Self::X11(context) => {
                 if !context
                     .available_formats()

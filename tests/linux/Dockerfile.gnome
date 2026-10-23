@@ -1,0 +1,8 @@
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gnome-shell dbus-x11 libglib2.0-bin libgl1-mesa-dri \
+    && rm -rf /var/lib/apt/lists/*
+RUN useradd --create-home tester
+USER tester
+ENV LANG=C.UTF-8
+WORKDIR /tmp

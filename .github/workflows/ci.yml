@@ -70,3 +70,23 @@ jobs:
             -v "$PWD/target/debug/deps:/tests:ro" \
             -v "$PWD/tests/linux/run-kwin.sh:/run-tests.sh:ro" \
             our-clipboard-kwin-tests bash /run-tests.sh "/tests/$(basename "$binary")"
+  gnome-clipboard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked --tests
+      - run: docker build -t our-clipboard-gnome-tests -f tests/linux/Dockerfile.gnome .
+      - name: GNOME 46 native Wayland clipboard tests
+        shell: bash
+        run: |
+          binary=$(find target/debug/deps -maxdepth 1 -type f -executable -name 'clipboard-*' -print -quit)
+          test -n "$binary"
+          docker run --rm --network none --memory 2g \
+            -e OUR_CLIPBOARD_TEST_CLI=/our-clipboard \
+            -v "$PWD/target/debug/our-clipboard:/our-clipboard:ro" \
+            -v "$PWD/target/debug/deps:/tests:ro" \
+            -v "$PWD/gnome/our-clipboard@daropotter:/extension:ro" \
+            -v "$PWD/tests/linux/run-gnome.sh:/run-tests.sh:ro" \
+            our-clipboard-gnome-tests bash /run-tests.sh "/tests/$(basename "$binary")"

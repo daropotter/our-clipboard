@@ -6,6 +6,8 @@ use std::{
 };
 
 #[cfg(target_os = "linux")]
+mod gnome;
+#[cfg(target_os = "linux")]
 mod wayland;
 #[cfg(target_os = "linux")]
 mod x11;
@@ -26,6 +28,8 @@ enum Backend {
     X11(Box<x11::Watcher>),
     #[cfg(target_os = "linux")]
     Wayland(Box<wayland::Watcher>),
+    #[cfg(target_os = "linux")]
+    Gnome(gnome::Watcher),
     #[cfg(target_os = "windows")]
     Windows(windows::Watcher),
     #[cfg(target_os = "macos")]
@@ -40,7 +44,10 @@ impl Watcher {
                 || std::env::var_os("XDG_SESSION_TYPE").is_some_and(|s| s == "wayland")
             {
                 return Ok(Self {
-                    backend: Backend::Wayland(Box::new(wayland::Watcher::new()?)),
+                    backend: match wayland::Watcher::new() {
+                        Ok(watcher) => Backend::Wayland(Box::new(watcher)),
+                        Err(error) => Backend::Gnome(gnome::Watcher::new().map_err(|_| error)?),
+                    },
                     _thread_bound: PhantomData,
                 });
             }
@@ -73,6 +80,8 @@ impl Watcher {
             Backend::X11(_) => "X11 XFixes",
             #[cfg(target_os = "linux")]
             Backend::Wayland(watcher) => watcher.backend_name(),
+            #[cfg(target_os = "linux")]
+            Backend::Gnome(_) => "GNOME Shell owner-change counter",
             #[cfg(target_os = "windows")]
             Backend::Windows(_) => "Windows WM_CLIPBOARDUPDATE",
             #[cfg(target_os = "macos")]
@@ -90,6 +99,8 @@ impl Watcher {
                 Backend::X11(w) => w.changed()?,
                 #[cfg(target_os = "linux")]
                 Backend::Wayland(w) => w.changed()?,
+                #[cfg(target_os = "linux")]
+                Backend::Gnome(w) => w.changed()?,
                 #[cfg(target_os = "windows")]
                 Backend::Windows(w) => w.changed()?,
                 #[cfg(target_os = "macos")]
