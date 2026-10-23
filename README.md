@@ -70,3 +70,27 @@ Normal `cargo test` skips these destructive graphical tests explicitly. KWin,
 GNOME, permission denial, notifications, lock/unlock, and suspend/resume still
 need dedicated coverage before platform support can be claimed. Runner tests do
 not certify desktop OS releases.
+
+## Automatic stack retargeting
+
+After a PR is merged, the `Retarget stacked PRs` workflow moves open PRs targeting
+its source branch to its actual merge target (including targets other than
+`main`). Only direct children move; deeper stack layers keep their dependencies.
+Already retargeted or closed PRs are skipped, and failed updates fail the workflow
+while allowing other children to be processed. Failed runs can be rerun.
+
+The workflow uses `pull_request_target: closed`, repository code from the trusted
+workflow revision, and `GITHUB_TOKEN` with pull-request write permission. It never
+executes the triggering PR's code. Merged fork heads are ignored because their
+branch names do not identify base branches in this repository.
+
+This automation becomes active after the workflow is merged; it does not replay
+past merges. Retargeting with `GITHUB_TOKEN` does not itself trigger another Actions
+workflow, so rerun CI or push a new commit if fresh checks against the new base
+are needed. Retargeting does not rebase commits or merge PRs.
+
+Run its API-mocked regression tests with Node.js 22 or newer:
+
+```sh
+node --test .github/scripts/*.test.cjs
+```
