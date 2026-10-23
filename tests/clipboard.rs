@@ -133,3 +133,53 @@ fn native_watch_reports_changes_without_exposing_text() {
     assert!(child.0.wait().unwrap().success());
     reader.join().unwrap();
 }
+
+#[test]
+#[ignore = "writes synthetic text; requires a disposable graphical session"]
+fn received_writes_are_not_reemitted_but_same_text_local_copies_are() {
+    use std::time::Duration;
+    let mut external = our_clipboard::clipboard::TextClipboard::new().unwrap();
+    external.set_text(SAMPLE).unwrap();
+    let mut session = our_clipboard::session::ClipboardSession::new().unwrap();
+    assert!(
+        session
+            .next_local_text(Duration::from_millis(100))
+            .unwrap()
+            .is_none()
+    );
+    session.apply_received_text(SAMPLE).unwrap();
+    let observed = external.get_text().unwrap();
+    assert!(
+        observed == SAMPLE,
+        "received write did not reach native clipboard"
+    );
+    assert!(
+        session
+            .next_local_text(Duration::from_millis(200))
+            .unwrap()
+            .is_none(),
+        "received write echoed as local"
+    );
+    external.set_text(SAMPLE).unwrap();
+    let local = session.next_local_text(Duration::from_secs(2)).unwrap();
+    assert!(
+        local.as_deref() == Some(SAMPLE),
+        "same-text local copy was suppressed"
+    );
+    session
+        .apply_received_text("Synthetic response 🦀")
+        .unwrap();
+    assert!(
+        session
+            .next_local_text(Duration::from_millis(200))
+            .unwrap()
+            .is_none(),
+        "response caused a loop"
+    );
+    assert!(session.apply_received_text("").is_err());
+    let observed = external.get_text().unwrap();
+    assert!(
+        observed == "Synthetic response 🦀",
+        "invalid application changed clipboard"
+    );
+}

@@ -83,7 +83,10 @@ impl TextClipboard {
     pub fn get_text(&mut self) -> Result<String, &'static str> {
         match &mut self.backend {
             Backend::Native(clipboard) => {
-                let text = clipboard.get_text().map_err(|_| "Clipboard read failed.")?;
+                let text = clipboard.get_text().map_err(|error| match error {
+                    arboard::Error::ContentNotAvailable => crate::text::TextError::Empty.message(),
+                    _ => "Clipboard read failed.",
+                })?;
                 crate::text::validate(&text).map_err(|error| error.message())?;
                 Ok(text)
             }
@@ -92,7 +95,13 @@ impl TextClipboard {
                 use wl_clipboard_rs::paste::{ClipboardType, MimeType, Seat, get_contents};
                 let (pipe, _) =
                     get_contents(ClipboardType::Regular, Seat::Unspecified, MimeType::Text)
-                        .map_err(|_| "Clipboard read failed.")?;
+                        .map_err(|error| match error {
+                            wl_clipboard_rs::paste::Error::ClipboardEmpty
+                            | wl_clipboard_rs::paste::Error::NoMimeType => {
+                                crate::text::TextError::Empty.message()
+                            }
+                            _ => "Clipboard read failed.",
+                        })?;
                 crate::text::read_bounded(pipe).map_err(|error| error.message())
             }
         }
