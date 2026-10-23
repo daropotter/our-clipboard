@@ -135,3 +135,16 @@ fn synthetic_transport_probe_runs_without_a_graphical_session() {
     assert!(report.contains("Untrusted peers rejected on both sides"));
     assert!(report.contains("Synthetic data only"));
 }
+
+#[test]
+#[cfg(feature = "os-keyring")]
+fn invalid_identity_profile_is_rejected_without_accessing_credentials() {
+    let output = cli(&["identity", "init", "--profile", "../other"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("Identity profile must contain")
+    );
+}

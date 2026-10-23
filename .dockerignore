@@ -4,3 +4,5 @@
 !tests/linux/Dockerfile
 !tests/linux/Dockerfile.kwin
 !tests/linux/Dockerfile.gnome
+!tests/identity/
+!tests/identity/Dockerfile

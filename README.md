@@ -220,6 +220,46 @@ sessions. It does not provide production session stabilization, pairing,
 membership, TTL/freshness, reconnect behavior, multi-hop delivery or cross-platform
 end-to-end certification. Those remain explicit next increments.
 
+## Persistent client signing identity
+
+```sh
+cargo run -- identity init
+cargo run -- identity show
+cargo run -- identity init --profile workstation
+```
+
+An explicit `init` creates a client Ed25519 signing key in the platform credential
+store: Windows Credential Manager, macOS Keychain, or Linux Secret Service.
+Repeated initialization and later processes keep the same public fingerprint.
+`show` never generates a key. Locked/unavailable stores, corrupt records, and a
+key that differs from its saved public pin fail without replacement or plaintext
+file fallback. The CLI prints the fingerprint, never seed/key bytes.
+
+The configuration directory holds only a versioned public-key pin and an empty
+profile lock; writes are serialized and public pins are created atomically without
+overwriting existing metadata. If credential saving succeeded before a crash but
+the public pin was not created, explicit initialization recovers the pin from that
+same credential. A missing credential with an existing pin requires recovery,
+not automatic key rotation. Replacement/reset/export commands are not provided.
+
+Profiles accept 1–64 ASCII letters/digits/hyphens/underscores. The default metadata
+root is the platform configuration location; `OUR_CLIPBOARD_CONFIG_DIR` explicitly
+overrides it. Client credentials use a client-specific namespace, leaving relay
+identities separate. System-store protections depend on the user's OS configuration.
+
+For a headless build with a configured credential service:
+
+```sh
+cargo run --no-default-features --features os-keyring -- identity show
+```
+
+No service means an explicit error. `--no-default-features` alone omits the system
+keyring integration. Tests use unique ephemeral credentials on Windows/macOS and
+an encrypted, unlocked test collection on a private Linux Secret Service bus;
+the host keyring is not touched by the container test. The synthetic transport
+fixtures still use ephemeral test identities; persistent signing identity is not
+connected to a production pairing/client protocol yet.
+
 ## License
 
 [MIT](LICENSE), copyright 2026 Daro Potter.
