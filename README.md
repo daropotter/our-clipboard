@@ -63,9 +63,12 @@ verify it in a second process while the clipboard owner remains alive:
 cargo test --locked --test clipboard -- --ignored --test-threads=1
 ```
 
-CI runs these tests in disposable Windows/macOS runners, Xvfb, and headless Sway.
-Normal `cargo test` skips these destructive graphical tests explicitly. KWin,
-GNOME, permission denial, notifications, lock/unlock, and suspend/resume still
+CI runs these tests in disposable Windows/macOS runners, Xvfb, headless Sway,
+and KWin 6 with a virtual output. The KWin environment uses Debian 13 and
+software rendering, with no XWayland, physical GPU, or host clipboard access.
+This tests native clipboard data-control, not a full Plasma desktop session.
+Normal `cargo test` skips these destructive graphical tests explicitly. GNOME,
+permission denial, notifications, lock/unlock, and suspend/resume still
 need dedicated coverage before platform support can be claimed. Runner tests do
 not certify desktop OS releases.
 
