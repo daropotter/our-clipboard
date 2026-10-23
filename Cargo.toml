@@ -11,3 +11,4 @@ arboard = { version = "3.7.0", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wl-clipboard-rs = "0.9.4"
+x11rb = { version = "0.13.2", features = ["xfixes"] }

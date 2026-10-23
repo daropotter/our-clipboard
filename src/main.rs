@@ -11,6 +11,8 @@ Commands:
               Initialize the clipboard backend without reading or writing text
   clipboard-probe --replace-clipboard
               Replace the clipboard with synthetic text and verify access
+  watch-probe --observe-clipboard <seconds>
+              Count native clipboard notifications without reading text (1-60 seconds)
   help        Show this help
   --version   Show version
 
@@ -26,6 +28,7 @@ fn run(args: &[String]) -> Result<String, &'static str> {
         [] | ["help"] | ["--help"] | ["-h"] => Ok(HELP.into()),
         ["--version"] | ["-V"] => Ok(format!("our-clipboard {}", env!("CARGO_PKG_VERSION"))),
         ["clipboard-probe", "--replace-clipboard"] => clipboard_probe(),
+        ["watch-probe", "--observe-clipboard", seconds] => watch_probe(seconds),
         ["doctor", "--clipboard"] => clipboard_doctor(),
         ["doctor"] => Ok(format!(
             "OS: {}\nArchitecture: {}\nSynchronization: not implemented",
@@ -34,6 +37,36 @@ fn run(args: &[String]) -> Result<String, &'static str> {
         )),
         _ => Err("Unknown command or unexpected arguments. Run 'our-clipboard help'."),
     }
+}
+
+fn watch_probe(seconds: &str) -> Result<String, &'static str> {
+    use std::{
+        io::Write,
+        time::{Duration, Instant},
+    };
+    let seconds = seconds
+        .parse::<u64>()
+        .ok()
+        .filter(|s| (1..=60).contains(s))
+        .ok_or("Watch duration must be an integer from 1 to 60 seconds.")?;
+    let mut watcher = our_clipboard::watch::Watcher::new()?;
+    println!(
+        "Watching: {}. Clipboard contents are never read.",
+        watcher.backend_name()
+    );
+    std::io::stdout()
+        .flush()
+        .map_err(|_| "Could not write watch status.")?;
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let mut count = 0_u64;
+    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+        if watcher.wait(remaining)? {
+            count += 1;
+        }
+    }
+    Ok(format!(
+        "Clipboard notifications: {count}. Synchronization is not implemented."
+    ))
 }
 
 fn clipboard_doctor() -> Result<String, &'static str> {

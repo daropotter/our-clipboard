@@ -122,3 +122,19 @@ prepare clipboard access; network synchronization is not implemented yet.
 ## License
 
 [MIT](LICENSE), copyright 2026 Daro Potter.
+
+## Native notification probe
+
+```sh
+cargo run -- watch-probe --observe-clipboard 10
+```
+
+The bounded probe subscribes to X11 XFixes notifications for CLIPBOARD and reports
+only their count. It never reads clipboard contents, ignores PRIMARY, and does
+not emit the selection already present at startup. Repeated copies of identical
+text count as separate native changes. Selection clears and owner exits may also
+produce notifications; a notification is not yet a publishable text event.
+
+This increment supports X11 only. Wayland and other systems return an explicit
+unsupported error, without an XWayland fallback. Own-write suppression, native
+watchers on other platforms, and network synchronization follow separately.
