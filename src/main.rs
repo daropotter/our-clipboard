@@ -15,6 +15,7 @@ Commands:
               Replace the clipboard with synthetic text and verify access
   watch-probe --observe-clipboard <seconds>
               Count native clipboard notifications without reading text (1-60 seconds)
+  freshness-probe  Check suspend-aware clocks and synthetic age decisions
   envelope-probe   Check synthetic signed envelopes and replay filtering
   transport-probe
               Check synthetic mutual TLS over direct and relayed loopback connections
@@ -30,6 +31,7 @@ Usage: our-clipboard <COMMAND>
 
 Commands:
   doctor           Report runtime platform information
+  freshness-probe  Check suspend-aware clocks and synthetic age decisions
   envelope-probe   Check synthetic signed envelopes and replay filtering
   transport-probe  Check synthetic mutual TLS over direct and relayed loopback connections
   help             Show this help
@@ -68,6 +70,7 @@ fn run(args: &[String]) -> Result<String, &'static str> {
         ["identity", action @ ("init" | "show"), "--profile", profile] => {
             our_clipboard::identity::manage(action, profile).map_err(|error| error.message())
         }
+        ["freshness-probe"] => our_clipboard::freshness::probe().map_err(|error| error.message()),
         ["envelope-probe"] => our_clipboard::events::probe().map_err(|error| error.message()),
         ["transport-probe"] => our_clipboard::transport::probe(),
         ["doctor"] => Ok(format!(

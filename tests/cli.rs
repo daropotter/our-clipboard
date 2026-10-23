@@ -159,3 +159,14 @@ fn signed_envelope_probe_needs_no_graphical_session_or_credential_store() {
             .contains("Tampering and duplicate delivery rejected")
     );
 }
+
+#[test]
+fn freshness_probe_needs_no_display_or_credential_store() {
+    let output = cli(&["freshness-probe"]);
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("UTC-independent age checks passed")
+    );
+}
