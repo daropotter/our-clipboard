@@ -21,3 +21,31 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       - run: cargo run --locked -- doctor
+  native-clipboard:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked --test clipboard -- --ignored --test-threads=1
+  linux-clipboard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked --tests
+      - run: docker build -t our-clipboard-tests -f tests/linux/Dockerfile .
+      - name: Isolated X11 and native Wayland round trips
+        shell: bash
+        run: |
+          binary=$(find target/debug/deps -maxdepth 1 -type f -executable -name 'clipboard-*' -print -quit)
+          test -n "$binary"
+          docker run --rm --network none \
+            -v "$PWD/target/debug/deps:/tests:ro" \
+            -v "$PWD/tests/linux/run.sh:/run-tests.sh:ro" \
+            our-clipboard-tests bash /run-tests.sh "/tests/$(basename "$binary")"

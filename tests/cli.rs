@@ -37,7 +37,12 @@ fn doctor_reports_runtime_platform() {
 
 #[test]
 fn invalid_commands_fail_without_claiming_success() {
-    for args in [vec!["client"], vec!["relay"], vec!["doctor", "unexpected"]] {
+    for args in [
+        vec!["client"],
+        vec!["clipboard-probe"],
+        vec!["relay"],
+        vec!["doctor", "unexpected"],
+    ] {
         let output = cli(&args);
         assert_eq!(output.status.code(), Some(2));
         assert!(output.stdout.is_empty());

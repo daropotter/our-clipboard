@@ -6,6 +6,8 @@ Usage: our-clipboard <COMMAND>
 
 Commands:
   doctor      Report runtime platform information
+  clipboard-probe --replace-clipboard
+              Replace the clipboard with synthetic text and verify access
   help        Show this help
   --version   Show version
 
@@ -20,6 +22,7 @@ fn run(args: &[String]) -> Result<String, &'static str> {
     {
         [] | ["help"] | ["--help"] | ["-h"] => Ok(HELP.into()),
         ["--version"] | ["-V"] => Ok(format!("our-clipboard {}", env!("CARGO_PKG_VERSION"))),
+        ["clipboard-probe", "--replace-clipboard"] => clipboard_probe(),
         ["doctor"] => Ok(format!(
             "OS: {}\nArchitecture: {}\nSynchronization: not implemented",
             std::env::consts::OS,
@@ -27,6 +30,22 @@ fn run(args: &[String]) -> Result<String, &'static str> {
         )),
         _ => Err("Unknown command or unexpected arguments. Run 'our-clipboard help'."),
     }
+}
+
+fn clipboard_probe() -> Result<String, &'static str> {
+    // Never read the user's old clipboard or include backend errors in logs.
+    let mut clipboard = arboard::Clipboard::new().map_err(
+        |_| "Clipboard unavailable. Check the graphical session and clipboard permissions.",
+    )?;
+    let text = "Our Clipboard synthetic probe\nZażółć gęślą jaźń 🦀";
+    clipboard
+        .set_text(text)
+        .map_err(|_| "Clipboard write failed.")?;
+    let observed = clipboard.get_text().map_err(|_| "Clipboard read failed.")?;
+    if observed != text {
+        return Err("Clipboard verification failed; contents are omitted.");
+    }
+    Ok("Synthetic clipboard round trip passed. Synchronization is not implemented.".into())
 }
 
 fn main() -> ExitCode {
