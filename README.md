@@ -18,7 +18,20 @@ and Linux (X11 and native Wayland); these are goals, not verified support claims
 
 ## Development
 
-Implementation and development instructions arrive in the first pull request.
+Install stable Rust, then run:
+
+```sh
+cargo run -- --help
+cargo run -- doctor
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+```
+
+The CLI provides help, version information, and runtime platform diagnostics.
+It does not read the clipboard. Client and relay commands are not available yet.
+CI runs formatting, linting, and CLI tests on Linux, Windows, and macOS.
+This does not verify graphical clipboard access on those systems.
 All source code, documentation, and pull requests use English.
 
 After the initial repository commit, changes go through pull requests. Each pull

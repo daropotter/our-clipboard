@@ -1,0 +1,9 @@
+[package]
+name = "our-clipboard"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Clipboard sharing between trusted computers"
+repository = "https://github.com/daropotter/our-clipboard"
+
+[dependencies]

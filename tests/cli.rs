@@ -1,0 +1,46 @@
+use std::process::Command;
+
+fn cli(args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn help_is_available_without_a_graphical_session() {
+    let output = cli(&["--help"]);
+    assert!(output.status.success());
+    assert!(String::from_utf8(output.stdout).unwrap().contains("Usage:"));
+}
+
+#[test]
+fn version_matches_package() {
+    let output = cli(&["--version"]);
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        format!("our-clipboard {}", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
+fn doctor_reports_runtime_platform() {
+    let output = cli(&["doctor"]);
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains(std::env::consts::OS)
+    );
+}
+
+#[test]
+fn invalid_commands_fail_without_claiming_success() {
+    for args in [vec!["client"], vec!["relay"], vec!["doctor", "unexpected"]] {
+        let output = cli(&args);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert!(!output.stderr.is_empty());
+    }
+}
