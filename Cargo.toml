@@ -37,7 +37,7 @@ clipboard-win = { version = "5.4.3", features = ["monitor"], optional = true }
 windows-sys = { version = "0.61", features = ["Win32_System_WindowsProgramming"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2"
+mach2 = "0.7"
 objc2 = { version = "0.6.5", optional = true }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSPasteboard"], optional = true }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData", "NSString"], optional = true }

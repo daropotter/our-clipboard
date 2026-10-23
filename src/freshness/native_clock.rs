@@ -30,15 +30,13 @@ impl BootClock for SystemBootClock {
         }
         #[cfg(target_os = "macos")]
         {
-            unsafe extern "C" {
-                fn mach_continuous_time() -> u64;
-            }
-            let mut scale = libc::mach_timebase_info_data_t { numer: 0, denom: 0 };
+            let mut scale = mach2::mach_time::mach_timebase_info_data_t { numer: 0, denom: 0 };
             // Both calls are provided by libSystem. The output pointer is valid.
-            if unsafe { libc::mach_timebase_info(&mut scale) } != 0 || scale.denom == 0 {
+            if unsafe { mach2::mach_time::mach_timebase_info(&mut scale) } != 0 || scale.denom == 0
+            {
                 return Err(ClockError::Unavailable);
             }
-            let ticks = unsafe { mach_continuous_time() };
+            let ticks = unsafe { mach2::mach_time::mach_continuous_time() };
             u64::try_from(
                 u128::from(ticks) * u128::from(scale.numer) / u128::from(scale.denom) / 1_000_000,
             )
