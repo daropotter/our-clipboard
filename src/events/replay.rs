@@ -48,22 +48,23 @@ impl ReplayGuard {
         } else if self.states.len() >= self.capacity {
             return Err(EventError::Capacity);
         }
+        let previous_lamport = self.states.get(&key).map_or(0, |state| state.lamport);
         self.states.insert(
             key,
             State {
                 binding,
                 sequence: 0,
-                lamport: 0,
+                lamport: previous_lamport,
                 recent: VecDeque::new(),
             },
         );
         Ok(())
     }
-    pub fn observe(&mut self, event: &VerifiedTextEvent<'_>) -> Result<ReplayDecision, EventError> {
+    pub fn check(&self, event: &VerifiedTextEvent<'_>) -> Result<ReplayDecision, EventError> {
         let context = event.context();
         let state = self
             .states
-            .get_mut(&(context.group, event.source()))
+            .get(&(context.group, event.source()))
             .ok_or(EventError::UnknownSession)?;
         if context.session != state.binding.session {
             return Err(EventError::RetiredSession);
@@ -89,6 +90,19 @@ impl ReplayGuard {
         if context.lamport <= state.lamport {
             return Err(EventError::ClockNotAdvanced);
         }
+        Ok(ReplayDecision::New)
+    }
+    pub fn observe(&mut self, event: &VerifiedTextEvent<'_>) -> Result<ReplayDecision, EventError> {
+        let decision = self.check(event)?;
+        if decision != ReplayDecision::New {
+            return Ok(decision);
+        }
+        let context = event.context();
+        let hash = event.envelope_hash();
+        let state = self
+            .states
+            .get_mut(&(context.group, event.source()))
+            .ok_or(EventError::UnknownSession)?;
         state.sequence = context.sequence;
         state.lamport = context.lamport;
         state.recent.push_back((context.sequence, hash));

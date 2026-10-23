@@ -287,8 +287,48 @@ membership rights, handshake freshness or application acknowledgements. Replay
 state is in memory; production restart handling must restore trusted state or
 establish fresh sessions and enforce the new-session boundary. Signed Unix time
 is metadata, not sufficient evidence of age. The signed boot-time timestamp is
-reserved for suspend-aware freshness checks in the next increment. The existing
+used for the suspend-aware freshness checks below. The existing
 TLS/clipboard fixtures retain their separate experimental framing for now.
+
+## Freshness and logical admission prototype
+
+```sh
+cargo run --no-default-features -- freshness-probe
+```
+
+A one-use random challenge obtains a signed source boot-clock sample bound to
+both devices, both sessions, group and membership revision. Delayed/replayed
+replies cannot refresh an estimate. Fixed versioned request/reply encodings carry
+no clipboard text. Production transport must authenticate membership before
+answering clock requests; this exchange alone grants no permissions.
+
+Linux CLOCK_BOOTTIME, Windows QueryInterruptTimePrecise and macOS
+mach_continuous_time count suspend time. UTC is display metadata only; there is
+no wall-clock fallback. ClockPolicy requires explicit relative drift, granularity,
+maximum RTT and calibration lifetime bounds. These are deployment assumptions to
+validate before production, not universal guarantees. The probe uses ideal fake
+clock bounds only for synthetic data. Native suspend/resume still needs dedicated
+VM/desktop validation; ordinary tests simulate elapsed suspend time without
+changing the host clock.
+
+Clock estimates conservatively bound age and grow uncertainty with elapsed time
+and drift. Expired, future, uncertain, wrong-context or stale-calibration events
+cannot enter logical admission. TTL is capped by the receiver and forwarding
+never resets it. A new authenticated receiver session mutes for its maximum TTL
+and then rejects events created before that boundary. Preserve the same running
+session across accidental reconnects; restart/manual rejoin requires a fresh one.
+
+Admission checks freshness before touching replay watermarks or logical clocks.
+Concurrent candidates converge by (Lamport, device ID); duplicate deliveries do
+not advance clocks. Source session changes retain source Lamport watermarks.
+Overflow fails without partial mutation. Only winner metadata is retained, with
+no clipboard history. Logical selection is not a clipboard-write acknowledgement:
+the actuator must separately track successful application and retries.
+
+Replay/Lamport state is still in memory. Durable watermarks, authenticated startup
+seeding, pairing/membership, clock negotiation and the actual transport/clipboard
+admission pipeline remain to be integrated. The current TLS fixtures retain their
+experimental framing and do not exercise this new admission pipeline end to end.
 
 ## License
 
