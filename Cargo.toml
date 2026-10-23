@@ -7,3 +7,4 @@ description = "Clipboard sharing between trusted computers"
 repository = "https://github.com/daropotter/our-clipboard"
 
 [dependencies]
+arboard = { version = "3.7.0", default-features = false, features = ["wayland-data-control"] }

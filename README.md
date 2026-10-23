@@ -29,7 +29,7 @@ cargo test --locked
 ```
 
 The CLI provides help, version information, and runtime platform diagnostics.
-It does not read the clipboard. Client and relay commands are not available yet.
+The `doctor` command does not read the clipboard. Client and relay commands are not available yet.
 CI runs formatting, linting, and CLI tests on Linux, Windows, and macOS.
 This does not verify graphical clipboard access on those systems.
 All source code, documentation, and pull requests use English.
@@ -42,6 +42,34 @@ merge the stack from the bottom up, retargeting dependent pull requests as neede
 ## License
 
 [MIT](LICENSE), copyright 2026 Dariusz Wojciechowski.
+
+## Clipboard access prototype
+
+```sh
+cargo run -- clipboard-probe --replace-clipboard
+```
+
+This explicit, destructive probe replaces the current clipboard with synthetic
+Unicode text and checks a readback. Use a disposable session. It does not save or
+restore previous contents, log text, establish pairing, or synchronize devices.
+On X11/Wayland, clipboard ownership may end when the process exits.
+
+The prototype uses `arboard` with native Wayland data-control enabled. It requires
+a graphical session and its permissions. GNOME Wayland without a compatible
+data-control protocol needs a separate adapter; it is not supported by this probe.
+
+Opt-in integration tests write synthetic multiline Unicode in one process and
+verify it in a second process while the clipboard owner remains alive:
+
+```sh
+cargo test --locked --test clipboard -- --ignored --test-threads=1
+```
+
+CI runs these tests in disposable Windows/macOS runners, Xvfb, and headless Sway.
+Normal `cargo test` skips these destructive graphical tests explicitly. KWin,
+GNOME, permission denial, notifications, lock/unlock, and suspend/resume still
+need dedicated coverage before platform support can be claimed. Runner tests do
+not certify desktop OS releases.
 
 ## Automatic stack retargeting
 

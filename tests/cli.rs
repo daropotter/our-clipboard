@@ -37,10 +37,35 @@ fn doctor_reports_runtime_platform() {
 
 #[test]
 fn invalid_commands_fail_without_claiming_success() {
-    for args in [vec!["client"], vec!["relay"], vec!["doctor", "unexpected"]] {
+    for args in [
+        vec!["client"],
+        vec!["clipboard-probe"],
+        vec!["relay"],
+        vec!["doctor", "unexpected"],
+    ] {
         let output = cli(&args);
         assert_eq!(output.status.code(), Some(2));
         assert!(output.stdout.is_empty());
         assert!(!output.stderr.is_empty());
     }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn clipboard_probe_fails_clearly_without_a_graphical_session() {
+    let output = Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
+        .args(["clipboard-probe", "--replace-clipboard"])
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("WAYLAND_SOCKET")
+        .env("XDG_RUNTIME_DIR", "/nonexistent-our-clipboard-test-session")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("Clipboard unavailable")
+    );
 }
