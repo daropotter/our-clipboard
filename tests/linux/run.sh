@@ -1,10 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 binary=$1
-xvfb-run -a "$binary" --ignored --test-threads=1
+env -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE xvfb-run -a "$binary" --ignored --test-threads=1
 export XDG_RUNTIME_DIR="$(mktemp -d)"
 export WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman
 unset DISPLAY
+export XDG_SESSION_TYPE=wayland
 sway --unsupported-gpu --config /dev/null >"$XDG_RUNTIME_DIR/sway.log" 2>&1 &
 compositor_pid=$!
 trap 'kill "$compositor_pid" 2>/dev/null || true' EXIT

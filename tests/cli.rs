@@ -55,6 +55,7 @@ fn invalid_commands_fail_without_claiming_success() {
 fn clipboard_probe_fails_clearly_without_a_graphical_session() {
     let output = Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
         .args(["clipboard-probe", "--replace-clipboard"])
+        .env_remove("XDG_SESSION_TYPE")
         .env_remove("DISPLAY")
         .env_remove("WAYLAND_DISPLAY")
         .env_remove("WAYLAND_SOCKET")
@@ -67,5 +68,25 @@ fn clipboard_probe_fails_clearly_without_a_graphical_session() {
         String::from_utf8(output.stderr)
             .unwrap()
             .contains("Clipboard unavailable")
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn unavailable_wayland_does_not_fall_back_to_x11() {
+    let output = Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
+        .args(["clipboard-probe", "--replace-clipboard"])
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env("WAYLAND_DISPLAY", "our-clipboard-nonexistent-socket")
+        .env("DISPLAY", ":99")
+        .env("XDG_RUNTIME_DIR", "/nonexistent-our-clipboard-test-session")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("XWayland fallback is disabled")
     );
 }

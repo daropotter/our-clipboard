@@ -54,7 +54,9 @@ Unicode text and checks a readback. Use a disposable session. It does not save o
 restore previous contents, log text, establish pairing, or synchronize devices.
 On X11/Wayland, clipboard ownership may end when the process exits.
 
-The prototype uses `arboard` with native Wayland data-control enabled. It requires
+The prototype uses `arboard` for Windows/macOS/X11 and `wl-clipboard-rs`
+for native Wayland data-control. Wayland sessions never silently fall back to
+XWayland. The probe reports the backend used after successful verification. It requires
 a graphical session and its permissions. GNOME Wayland without a compatible
 data-control protocol needs a separate adapter; it is not supported by this probe.
 

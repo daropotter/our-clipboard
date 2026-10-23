@@ -6,7 +6,8 @@ const SAMPLE: &str = "Our Clipboard synthetic test\nZażółć gęślą jaźń �
 #[test]
 #[ignore = "replaces the clipboard; requires a disposable graphical session"]
 fn independent_process_reads_unicode_from_clipboard() {
-    let mut clipboard = arboard::Clipboard::new().expect("clipboard backend unavailable");
+    let mut clipboard =
+        our_clipboard::clipboard::TextClipboard::new().expect("clipboard backend unavailable");
     clipboard.set_text(SAMPLE).expect("clipboard write failed");
     let child = Command::new(std::env::current_exe().unwrap())
         .args(["--ignored", "--exact", "clipboard_reader", "--nocapture"])
@@ -27,7 +28,7 @@ fn clipboard_reader() {
     if std::env::var_os("OUR_CLIPBOARD_TEST_READER").is_none() {
         return;
     }
-    let observed = arboard::Clipboard::new()
+    let observed = our_clipboard::clipboard::TextClipboard::new()
         .expect("clipboard backend unavailable")
         .get_text()
         .expect("clipboard read failed");
