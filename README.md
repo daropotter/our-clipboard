@@ -39,10 +39,6 @@ request must provide a working increment and pass its checks. Pending increments
 may be stacked, with each pull request targeting the preceding branch. Review and
 merge the stack from the bottom up, retargeting dependent pull requests as needed.
 
-## License
-
-[MIT](LICENSE), copyright 2026 Dariusz Wojciechowski.
-
 ## Clipboard access prototype
 
 ```sh
@@ -94,3 +90,7 @@ Run its API-mocked regression tests with Node.js 22 or newer:
 ```sh
 node --test .github/scripts/*.test.cjs
 ```
+
+## License
+
+[MIT](LICENSE), copyright 2026 Dariusz Wojciechowski.
