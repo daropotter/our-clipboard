@@ -1,3 +1,4 @@
+use our_clipboard::clipboard::TextClipboard;
 use std::process::ExitCode;
 
 const HELP: &str = "Our Clipboard — early development
@@ -34,9 +35,7 @@ fn run(args: &[String]) -> Result<String, &'static str> {
 
 fn clipboard_probe() -> Result<String, &'static str> {
     // Never read the user's old clipboard or include backend errors in logs.
-    let mut clipboard = arboard::Clipboard::new().map_err(
-        |_| "Clipboard unavailable. Check the graphical session and clipboard permissions.",
-    )?;
+    let mut clipboard = TextClipboard::new()?;
     let text = "Our Clipboard synthetic probe\nZażółć gęślą jaźń 🦀";
     clipboard
         .set_text(text)
@@ -45,7 +44,10 @@ fn clipboard_probe() -> Result<String, &'static str> {
     if observed != text {
         return Err("Clipboard verification failed; contents are omitted.");
     }
-    Ok("Synthetic clipboard round trip passed. Synchronization is not implemented.".into())
+    Ok(format!(
+        "Synthetic clipboard round trip passed ({}). Synchronization is not implemented.",
+        clipboard.backend_name()
+    ))
 }
 
 fn main() -> ExitCode {

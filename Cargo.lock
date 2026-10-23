@@ -16,7 +16,6 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "windows-sys",
- "wl-clipboard-rs",
  "x11rb",
 ]
 
@@ -272,6 +271,7 @@ name = "our-clipboard"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "wl-clipboard-rs",
 ]
 
 [[package]]
