@@ -76,3 +76,73 @@ fn clipboard_doctor_reports_backend_without_changing_contents() {
         "doctor changed clipboard contents (omitted)"
     );
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+#[ignore = "writes synthetic text; requires a disposable graphical session"]
+fn native_watch_reports_changes_without_exposing_text() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let executable = std::env::var_os("OUR_CLIPBOARD_TEST_CLI")
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_our-clipboard").into());
+    if std::env::var_os("XDG_SESSION_TYPE").is_some_and(|s| s == "wayland") {
+        let output = Command::new(executable)
+            .args(["watch-probe", "--observe-clipboard", "1"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("XWayland fallback is disabled")
+        );
+        return;
+    }
+    // Seed a baseline before subscription: starting the observer must not emit it.
+    let mut clipboard = our_clipboard::clipboard::TextClipboard::new().unwrap();
+    clipboard.set_text(SAMPLE).unwrap();
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut child = ChildGuard(
+        Command::new(executable)
+            .args(["watch-probe", "--observe-clipboard", "2"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let stdout = child.0.stdout.take().unwrap();
+    let (send, receive) = mpsc::sync_channel(4);
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if send.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    let ready = receive
+        .recv_timeout(Duration::from_secs(3))
+        .expect("watcher did not become ready");
+    assert!(ready.starts_with("Watching: X11 XFixes"));
+    // A conscious copy of identical text must still be a separate native change.
+    clipboard.set_text(SAMPLE).unwrap();
+    clipboard.set_text(SAMPLE).unwrap();
+    let summary = receive
+        .recv_timeout(Duration::from_secs(4))
+        .expect("watcher did not finish");
+    assert!(
+        summary.starts_with("Clipboard notifications: 2."),
+        "unexpected notification count"
+    );
+    assert!(!summary.contains(SAMPLE));
+    assert!(child.0.wait().unwrap().success());
+    reader.join().unwrap();
+}

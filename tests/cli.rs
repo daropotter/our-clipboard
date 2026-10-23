@@ -41,6 +41,10 @@ fn invalid_commands_fail_without_claiming_success() {
         vec!["client"],
         vec!["clipboard-probe"],
         vec!["relay"],
+        vec!["watch-probe"],
+        vec!["watch-probe", "--observe-clipboard", "0"],
+        vec!["watch-probe", "--observe-clipboard", "61"],
+        vec!["watch-probe", "--observe-clipboard", "invalid"],
         vec!["doctor", "unexpected"],
         vec!["doctor", "--clipboard", "unexpected"],
     ] {
