@@ -46,9 +46,9 @@ impl Identity {
         })
     }
 }
-fn roots(peer: &Identity) -> Result<RootCertStore> {
+fn roots(peer: &CertificateDer<'static>) -> Result<RootCertStore> {
     let mut roots = RootCertStore::empty();
-    roots.add(peer.cert.clone()).map_err(|_| Error::Setup)?;
+    roots.add(peer.clone()).map_err(|_| Error::Setup)?;
     Ok(roots)
 }
 fn configs(
@@ -57,6 +57,15 @@ fn configs(
     trusted_server: &Identity,
     trusted_client: &Identity,
 ) -> Result<(Arc<ServerConfig>, Arc<ClientConfig>)> {
+    Ok((
+        server_config(server, &trusted_client.cert)?,
+        client_config(client, &trusted_server.cert)?,
+    ))
+}
+fn server_config(
+    server: &Identity,
+    trusted_client: &CertificateDer<'static>,
+) -> Result<Arc<ServerConfig>> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
         Arc::new(roots(trusted_client)?),
@@ -64,20 +73,28 @@ fn configs(
     )
     .build()
     .map_err(|_| Error::Setup)?;
-    let server_config = ServerConfig::builder_with_provider(provider.clone())
+    let config = ServerConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13])
         .map_err(|_| Error::Setup)?
         .with_client_cert_verifier(verifier)
         .with_single_cert(vec![server.cert.clone()], server.key.clone_key().into())
         .map_err(|_| Error::Setup)?;
-    let client_config = ClientConfig::builder_with_provider(provider)
-        .with_protocol_versions(&[&rustls::version::TLS13])
-        .map_err(|_| Error::Setup)?
-        .with_root_certificates(roots(trusted_server)?)
-        .with_client_auth_cert(vec![client.cert.clone()], client.key.clone_key().into())
-        .map_err(|_| Error::Setup)?;
-    Ok((Arc::new(server_config), Arc::new(client_config)))
+    Ok(Arc::new(config))
 }
+fn client_config(
+    client: &Identity,
+    trusted_server: &CertificateDer<'static>,
+) -> Result<Arc<ClientConfig>> {
+    let config =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .map_err(|_| Error::Setup)?
+            .with_root_certificates(roots(trusted_server)?)
+            .with_client_auth_cert(vec![client.cert.clone()], client.key.clone_key().into())
+            .map_err(|_| Error::Setup)?;
+    Ok(Arc::new(config))
+}
+
 fn io_error(error: std::io::Error) -> Error {
     if let Some(rustls::Error::InvalidCertificate(_) | rustls::Error::NoCertificatesPresented) =
         error
@@ -443,3 +460,8 @@ mod tests {
         ));
     }
 }
+
+#[cfg(feature = "clipboard")]
+mod clipboard_fixture;
+#[cfg(feature = "clipboard")]
+pub use clipboard_fixture::run as run_synthetic_clipboard_fixture;

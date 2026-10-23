@@ -33,3 +33,8 @@ clipboard-win = { version = "5.4.3", features = ["monitor"], optional = true }
 objc2 = { version = "0.6.5", optional = true }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSPasteboard"], optional = true }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData", "NSString"], optional = true }
+
+[[example]]
+name = "synthetic-clipboard-sync"
+path = "examples/synthetic-clipboard-sync.rs"
+required-features = ["clipboard"]

@@ -93,3 +93,17 @@ jobs:
             -v "$PWD/gnome/our-clipboard@daropotter:/extension:ro" \
             -v "$PWD/tests/linux/run-gnome.sh:/run-tests.sh:ro" \
             our-clipboard-gnome-tests bash /run-tests.sh "/tests/$(basename "$binary")"
+  two-clipboard-sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked --example synthetic-clipboard-sync
+      - run: docker build -t our-clipboard-tests -f tests/linux/Dockerfile .
+      - name: Two independent X11 clipboards over mutual TLS
+        run: |
+          docker run --rm --network none \
+            -v "$PWD/target/debug/examples:/examples:ro" \
+            -v "$PWD/tests/linux/run-sync.sh:/run-sync.sh:ro" \
+            our-clipboard-tests bash /run-sync.sh /examples/synthetic-clipboard-sync
