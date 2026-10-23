@@ -11,6 +11,7 @@ pub enum TextError {
     TooLarge,
     InvalidUtf8,
     ReadFailed,
+    ReadTimedOut,
 }
 
 impl TextError {
@@ -22,6 +23,7 @@ impl TextError {
             Self::TooLarge => "Clipboard text exceeds 10,000,000 UTF-8 bytes; skipped.",
             Self::InvalidUtf8 => "Clipboard text is not valid UTF-8; skipped.",
             Self::ReadFailed => "Clipboard read failed.",
+            Self::ReadTimedOut => "Clipboard payload read timed out.",
         }
     }
 }
@@ -49,9 +51,68 @@ pub fn read_bounded(reader: impl Read) -> Result<String, TextError> {
     if bytes.len() > MAX_TEXT_BYTES {
         return Err(TextError::TooLarge);
     }
+    finish_text(bytes)
+}
+
+fn finish_text(bytes: Vec<u8>) -> Result<String, TextError> {
     let text = String::from_utf8(bytes).map_err(|_| TextError::InvalidUtf8)?;
     validate(&text)?;
     Ok(text)
+}
+
+/// Bound the payload pipe by both bytes and a fixed deadline (not an idle timeout).
+/// Compositor negotiation before obtaining this pipe is outside this deadline.
+#[cfg(target_os = "linux")]
+pub fn read_bounded_fd(
+    reader: impl Read + std::os::fd::AsFd,
+    timeout: std::time::Duration,
+) -> Result<String, TextError> {
+    finish_text(read_bytes_bounded_fd(reader, MAX_TEXT_BYTES, timeout)?)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn read_bytes_bounded_fd(
+    mut reader: impl Read + std::os::fd::AsFd,
+    limit: usize,
+    timeout: std::time::Duration,
+) -> Result<Vec<u8>, TextError> {
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    use std::time::Instant;
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or(TextError::ReadFailed)?;
+    let max_read = limit.checked_add(1).ok_or(TextError::ReadFailed)?;
+    let mut bytes = Vec::new();
+    let mut chunk = [0; 8192];
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or(TextError::ReadTimedOut)?;
+        let timespec = Timespec::try_from(remaining).map_err(|_| TextError::ReadFailed)?;
+        let readiness = {
+            let mut fds = [PollFd::new(&reader, PollFlags::IN)];
+            poll(&mut fds, Some(&timespec))
+        };
+        match readiness {
+            Ok(0) => return Err(TextError::ReadTimedOut),
+            Ok(_) => {}
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(_) => return Err(TextError::ReadFailed),
+        }
+        let available = chunk.len().min(max_read - bytes.len());
+        let count = match reader.read(&mut chunk[..available]) {
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(TextError::ReadFailed),
+        };
+        if count == 0 {
+            return Ok(bytes);
+        }
+        bytes.extend_from_slice(&chunk[..count]);
+        if bytes.len() > limit {
+            return Err(TextError::TooLarge);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -81,6 +142,11 @@ mod tests {
     fn decimal_byte_limit_is_inclusive_and_not_a_character_limit() {
         let exact = "🦀".repeat(MAX_TEXT_BYTES / 4);
         assert_eq!(validate(&exact), Ok(()));
+        let observed = read_bounded(exact.as_bytes()).unwrap();
+        assert!(
+            observed == exact,
+            "inclusive-limit read changed contents (omitted)"
+        );
         let too_large = exact + "a";
         assert_eq!(validate(&too_large), Err(TextError::TooLarge));
         assert!(matches!(
@@ -117,5 +183,48 @@ mod tests {
             }
         }
         assert!(matches!(read_bounded(Broken), Err(TextError::ReadFailed)));
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod fd_tests {
+    use super::*;
+    use std::{io::Write, os::unix::net::UnixStream, time::Duration};
+
+    #[test]
+    fn stalled_owner_times_out_without_returning_partial_text() {
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(b"incomplete synthetic payload").unwrap();
+        // Keep the writer open: EOF never arrives.
+        assert!(matches!(
+            read_bounded_fd(reader, Duration::from_millis(50)),
+            Err(TextError::ReadTimedOut)
+        ));
+        drop(writer);
+    }
+
+    #[test]
+    fn payload_eof_preserves_unicode_and_whitespace() {
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        let sample = " 🦀\r\nsecond line\t";
+        writer.write_all(sample.as_bytes()).unwrap();
+        drop(writer);
+        let observed = read_bounded_fd(reader, Duration::from_secs(1)).unwrap();
+        assert!(observed == sample, "contents changed (omitted)");
+    }
+
+    #[test]
+    fn pipe_limit_is_inclusive_and_oversize_is_never_truncated() {
+        for (bytes, accepted) in [(32, true), (33, false)] {
+            let (reader, mut writer) = UnixStream::pair().unwrap();
+            writer.write_all(&vec![b'x'; bytes]).unwrap();
+            drop(writer);
+            let result = read_bytes_bounded_fd(reader, 32, Duration::from_secs(1));
+            if accepted {
+                assert!(result.is_ok());
+            } else {
+                assert!(matches!(result, Err(TextError::TooLarge)));
+            }
+        }
     }
 }
