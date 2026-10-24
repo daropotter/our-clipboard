@@ -451,6 +451,13 @@ lock detection and a network Idle announcement are not yet wired to this API.
 Buffer limits cover the one retained wire value; decoding/verification uses bounded
 scratch copies. Nothing from the buffer is persisted or exposed as history.
 
+Newly observed local copies must reserve numbers, sign the event and call
+`record_local_event` before sending. This transaction selects the local winner,
+so an older incoming candidate cannot overwrite it. Unreserved/foreign contexts
+and conflicting reuse are rejected; selection clears pending remote retries.
+A reservation by itself does not claim a clipboard copy. Native observation still
+must exclude startup and Idle-era contents.
+
 ## License
 
 [MIT](LICENSE), copyright 2026 Daro Potter.

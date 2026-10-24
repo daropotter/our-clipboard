@@ -90,6 +90,17 @@ impl BufferedDelivery {
             .reserve_publication()
             .map_err(|e| BufferError::Delivery(DeliveryError::State(e)))
     }
+    pub fn record_local_event(&mut self, event: &VerifiedTextEvent<'_>) -> Result<(), BufferError> {
+        self.healthy()?;
+        if self.idle {
+            return Err(BufferError::Idle);
+        }
+        self.delivery
+            .record_local_event(event)
+            .map_err(|e| BufferError::Delivery(DeliveryError::State(e)))?;
+        self.pending = None;
+        Ok(())
+    }
     pub fn receive<C: BootClock>(
         &mut self,
         event: &SignedTextEvent,

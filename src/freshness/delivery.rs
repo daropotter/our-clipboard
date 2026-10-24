@@ -37,6 +37,11 @@ impl DeliveryReceiver {
     pub fn reserve_publication(&mut self) -> Result<(u64, u64), StateError> {
         self.state.reserve_publication()
     }
+    pub fn record_local_event(&mut self, event: &VerifiedTextEvent<'_>) -> Result<(), StateError> {
+        self.state.record_local_event(event)?;
+        self.applied = None;
+        Ok(())
+    }
     /// Authenticate/verify first. Callers must send returned receipts only over authenticated channels.
     /// Retry by resubmitting the same envelope while fresh; failed writes do not produce receipts.
     /// The callback must report actual write success, not queue acceptance, and must not reenter.
