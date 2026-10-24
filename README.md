@@ -225,11 +225,13 @@ These bounds are test assumptions, not production guarantees. An extra 100 ms
 send delay keeps sample events away from uncertainty boundaries; TTL is not reset.
 
 Typed bounded frames distinguish clock requests/replies, signed events and
-hash-bound application receipts. Tampered signatures and pre-session/expired
+receiver-signed application receipts bound to the event and receiver sessions. Tampered signatures and pre-session/expired
 creation times preserve the receiver's baseline clipboard. An injected pre-write
 failure requests retransmission of the identical envelope, then a successful
-write produces its receipt; a further duplicate is acknowledged without another
-write. Independent readers and own-write markers continue checking application
+write produces its signed receipt; a further duplicate is acknowledged without
+another write. Per-target ledgers verify the pinned receiver key/session, count
+that target once, and reject an injected tampered ACK before accepting the valid
+original. Independent readers and own-write markers continue checking application
 and absence of echo in both directions.
 
 This proves the signed admission/clipboard/observer/TLS/application path for
@@ -427,8 +429,10 @@ This API currently represents successful application only. Idle/buffering, skip
 and error results need separate explicit states; they are not inferred as applied.
 The ledger retains metadata only and is not durable. Its owner must bound the
 number and lifetime of concurrent trackers. Group membership, routing and UI
-integration remain future increments; the current two-clipboard fixture still
-uses its preceding hash-only receipts until the following integration change.
+integration remain future increments. The two-clipboard TLS fixture exercises
+signed receipts in both directions, including tampered ACK rejection and
+idempotent per-target progress. Retry/rejection control hashes remain separate
+frame types and never count as application receipts.
 
 ## License
 

@@ -171,7 +171,8 @@ fn receiver() -> Result<()> {
     {
         return Err(Error::Frame);
     }
-    protocol::receipt(&mut stream, decision, event.envelope_hash())?;
+    protocol.send_receipt(&mut stream, decision, &event, true)?;
+    protocol.send_receipt(&mut stream, decision, &event, false)?;
     let duplicate = protocol::read_event(&mut stream)?;
     let decision = protocol
         .apply(&duplicate, &estimate, &mut session, false)?
@@ -182,7 +183,7 @@ fn receiver() -> Result<()> {
     ) {
         return Err(Error::Frame);
     }
-    protocol::receipt(&mut stream, decision, event.envelope_hash())?;
+    protocol.send_receipt(&mut stream, decision, &event, false)?;
     if receive_text(&mut stream)? != TARGET_VERIFIED {
         return Err(Error::Frame);
     }
@@ -196,7 +197,12 @@ fn receiver() -> Result<()> {
     }
     let response = protocol.sign(&response)?;
     protocol::send_event(&mut stream, &response)?;
-    protocol::expect_receipt(&mut stream, Kind::Applied, &response)?;
+    let mut tracker = protocol.tracker(&response)?;
+    if protocol.expect_applied(&mut stream, &mut tracker)? != crate::receipts::ReceiptDecision::New
+        || !tracker.progress().complete()
+    {
+        return Err(Error::Frame);
+    }
     if session
         .next_local_text(Duration::from_millis(100))
         .map_err(|_| Error::Worker)?
@@ -304,17 +310,31 @@ fn controller() -> Result<()> {
     let tampered =
         crate::events::SignedTextEvent::from_wire(&tampered).map_err(|_| Error::Frame)?;
     protocol::send_event(&mut stream, &tampered)?;
-    protocol::expect_receipt(&mut stream, Kind::Rejected, &tampered)?;
+    protocol::expect_control_hash(&mut stream, Kind::Rejected, &tampered)?;
     let expired = protocol.sign_expired(&text)?;
     protocol::send_event(&mut stream, &expired)?;
-    protocol::expect_receipt(&mut stream, Kind::Rejected, &expired)?;
+    protocol::expect_control_hash(&mut stream, Kind::Rejected, &expired)?;
 
     protocol::send_event(&mut stream, &event)?;
-    protocol::expect_receipt(&mut stream, Kind::Retry, &event)?;
+    protocol::expect_control_hash(&mut stream, Kind::Retry, &event)?;
     protocol::send_event(&mut stream, &event)?;
-    protocol::expect_receipt(&mut stream, Kind::Applied, &event)?;
+    let mut tracker = protocol.tracker(&event)?;
+    let before = tracker.progress();
+    if protocol.expect_applied(&mut stream, &mut tracker).is_ok() || tracker.progress() != before {
+        return Err(Error::Frame);
+    }
+    if protocol.expect_applied(&mut stream, &mut tracker)? != crate::receipts::ReceiptDecision::New
+        || !tracker.progress().complete()
+    {
+        return Err(Error::Frame);
+    }
     protocol::send_event(&mut stream, &event)?;
-    protocol::expect_receipt(&mut stream, Kind::Applied, &event)?;
+    if protocol.expect_applied(&mut stream, &mut tracker)?
+        != crate::receipts::ReceiptDecision::Duplicate
+        || tracker.progress().applied != 1
+    {
+        return Err(Error::Frame);
+    }
     inspect(&destination, false)?;
     send_text(&mut stream, TARGET_VERIFIED)?;
     let response = protocol::read_event(&mut stream)?;
@@ -332,7 +352,7 @@ fn controller() -> Result<()> {
     {
         return Err(Error::Frame);
     }
-    protocol::receipt(&mut stream, decision, response.envelope_hash())?;
+    protocol.send_receipt(&mut stream, decision, &response, false)?;
     stream.conn.send_close_notify();
     stream.flush().map_err(io_error)?;
     let mut trailing = [0; 1];
@@ -379,7 +399,7 @@ pub fn run(mode: &str) -> std::result::Result<String, &'static str> {
         |_| "Synthetic two-clipboard fixture failed; content and key material are omitted.",
     )?;
     Ok(if mode == "controller" {
-        "Two isolated X11 clipboards exchanged synthetic text over mutual TLS. Signed admission, durable reservations, tamper/age rejection, failed-write retry, duplicate receipts, independent application checks and no-echo checks passed.".into()
+        "Two isolated X11 clipboards exchanged synthetic text over mutual TLS. Signed admission, durable reservations, tamper/age rejection, failed-write retry, receiver-signed receipts, per-target progress, tampered ACK rejection, independent application checks and no-echo checks passed.".into()
     } else {
         String::new()
     })
