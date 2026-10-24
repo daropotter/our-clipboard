@@ -166,7 +166,7 @@ impl DurableAdmission {
             (None, None, None) => {}
             (Some(c), Some(source), Some(hash)) => {
                 let c = u64::from_be_bytes(c);
-                if c == 0 || c >= clock {
+                if c == 0 || c > clock {
                     return Err(StateError::InvalidState);
                 }
                 state.winner = Some(admission::Winner {
@@ -265,6 +265,39 @@ impl DurableAdmission {
         let clock = next.clock.tick().map_err(StateError::Admission)?;
         self.commit(next, sequence)?;
         Ok((sequence, clock))
+    }
+    /// Record a newly observed local copy after reserving/signing it, before network publication.
+    /// A reservation alone has no clipboard contents and is not a selected local winner.
+    pub fn record_local_event(&mut self, event: &VerifiedTextEvent<'_>) -> Result<(), StateError> {
+        self.healthy()?;
+        let c = event.context();
+        let binding = self.state.receiver.binding;
+        if event.source() != binding.receiver
+            || c.group != binding.group
+            || c.membership != binding.membership
+            || c.session != binding.session
+            || c.sequence != self.sequence
+            || c.lamport != self.state.clock()
+        {
+            return Err(StateError::Admission(AdmissionError::Replay(
+                EventError::InvalidContext,
+            )));
+        }
+        if let Some(w) = &self.state.winner {
+            if w.order == event.order_key() {
+                return if w.hash == event.envelope_hash() {
+                    Ok(())
+                } else {
+                    Err(StateError::Admission(AdmissionError::ConflictingOrder))
+                };
+            }
+        }
+        let mut next = self.state.clone();
+        next.winner = Some(admission::Winner {
+            order: event.order_key(),
+            hash: event.envelope_hash(),
+        });
+        self.commit(next, self.sequence)
     }
     pub fn activate_authenticated_source(
         &mut self,

@@ -405,3 +405,81 @@ fn malformed_version_counters_and_partial_winner_metadata_fail_closed() {
         );
     }
 }
+
+#[test]
+fn local_copy_is_selected_before_publication_and_survives_restart() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = private_directory();
+    let identity = DeviceIdentity::generate().unwrap();
+    let mut f = Fixture::new();
+    f.receiver = identity.id();
+    let mut state = DurableAdmission::initialize(dir.path(), f.gate(), 1).unwrap();
+    state.activate_authenticated_source(f.source()).unwrap();
+    let remote = f.event(1, 1, 60_000);
+    state
+        .admit(
+            &remote
+                .verify_with_trusted_key(&f.source.public_key())
+                .unwrap(),
+            &f.estimate(),
+            50_001,
+        )
+        .unwrap();
+    let (sequence, lamport) = state.reserve_publication().unwrap();
+    let c = EventContext {
+        group: [1; 32],
+        membership: [2; 32],
+        session: f.session,
+        sequence,
+        lamport,
+        created_unix_ms: 1,
+        created_boot_ms: 50_000,
+        ttl_ms: 30_000,
+    };
+    let local = SignedTextEvent::sign(c, "new local copy", &identity).unwrap();
+    let v = local
+        .verify_with_trusted_key(&identity.public_key())
+        .unwrap();
+    state.record_local_event(&v).unwrap();
+    state.record_local_event(&v).unwrap();
+    assert_eq!(state.winner_source(), Some(identity.id()));
+    let older = f.event(2, 2, 60_000);
+    assert_eq!(
+        state.admit(
+            &older
+                .verify_with_trusted_key(&f.source.public_key())
+                .unwrap(),
+            &f.estimate(),
+            50_001
+        ),
+        Ok(AdmissionDecision::OlderCandidate)
+    );
+    let conflict = SignedTextEvent::sign(c, "different local copy", &identity).unwrap();
+    assert!(
+        state
+            .record_local_event(
+                &conflict
+                    .verify_with_trusted_key(&identity.public_key())
+                    .unwrap()
+            )
+            .is_err()
+    );
+    drop(state);
+    f.restart();
+    let state = DurableAdmission::open(dir.path(), f.gate(), 1).unwrap();
+    assert_eq!(state.winner_source(), Some(identity.id()));
+}
+#[test]
+fn unreserved_or_foreign_local_event_cannot_change_winner() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = private_directory();
+    let f = Fixture::new();
+    let mut s = DurableAdmission::initialize(dir.path(), f.gate(), 1).unwrap();
+    let e = f.event(1, 1, 60_000);
+    assert!(
+        s.record_local_event(&e.verify_with_trusted_key(&f.source.public_key()).unwrap())
+            .is_err()
+    );
+    assert_eq!(s.clock(), 0);
+    assert_eq!(s.winner_source(), None);
+}
