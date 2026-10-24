@@ -7,7 +7,7 @@ use std::{
 };
 const RESPONSE: &str = "Synthetic reply from the second clipboard 🦀\nWith another line";
 const TARGET_VERIFIED: &str = "synthetic target independently verified";
-mod protocol;
+use super::peer_protocol as protocol;
 use protocol::{Kind, Protocol, PublicPeer, SigningPeer};
 
 struct ChildGuard(Child);
@@ -390,6 +390,18 @@ pub fn run(mode: &str) -> std::result::Result<String, &'static str> {
                 } else {
                     Err(Error::Frame)
                 }
+            }
+            "seed-request" | "seed-response" => {
+                let mut clipboard = TextClipboard::new().map_err(|_| Error::Worker)?;
+                clipboard
+                    .set_text(if mode == "seed-request" {
+                        SAMPLE
+                    } else {
+                        RESPONSE
+                    })
+                    .map_err(|_| Error::Worker)?;
+                thread::sleep(Duration::from_secs(15));
+                Ok(())
             }
             "check-display" => TextClipboard::new().map(|_| ()).map_err(|_| Error::Worker),
             _ => Err(Error::Setup),

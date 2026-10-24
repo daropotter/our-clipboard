@@ -181,3 +181,29 @@ fn durable_probe_uses_temporary_state_without_display_or_keyring() {
             .contains("reservations survived restart")
     );
 }
+
+#[cfg(feature = "clipboard")]
+#[test]
+fn pilot_requires_consent_and_explicit_clock_bounds_before_touching_clipboard() {
+    for args in [
+        vec!["pilot"],
+        vec!["pilot", "--replace-clipboard", "--stdio"],
+        vec!["pilot", "--ssh", "-ProxyCommand=bad"],
+    ] {
+        let output = cli(&args);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+    }
+}
+
+#[cfg(feature = "clipboard")]
+#[test]
+fn pilot_help_needs_no_graphical_session_or_ssh() {
+    let output = cli(&["pilot", "--help"]);
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("--max-drift-ppm")
+    );
+}

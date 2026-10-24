@@ -107,6 +107,22 @@ jobs:
             -v "$PWD/target/debug/examples:/examples:ro" \
             -v "$PWD/tests/linux/run-sync.sh:/run-sync.sh:ro" \
             our-clipboard-tests bash /run-sync.sh /examples/synthetic-clipboard-sync
+  interactive-pilot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked --bin our-clipboard --example synthetic-clipboard-sync
+      - run: docker build -t our-clipboard-tests -f tests/linux/Dockerfile .
+      - run: docker build -t our-clipboard-pilot-tests -f tests/linux/Dockerfile.pilot .
+      - name: Interactive native clipboard exchange over real private SSH
+        run: |
+          docker run --rm --network none \
+            -v "$PWD/target/debug/our-clipboard:/pilot:ro" \
+            -v "$PWD/target/debug/examples/synthetic-clipboard-sync:/helper:ro" \
+            -v "$PWD/tests/linux/run-pilot.sh:/run-pilot.sh:ro" \
+            our-clipboard-pilot-tests bash /run-pilot.sh /pilot /helper
   native-identity:
     strategy:
       fail-fast: false

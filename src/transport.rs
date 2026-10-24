@@ -465,3 +465,10 @@ mod tests {
 mod clipboard_fixture;
 #[cfg(feature = "clipboard")]
 pub use clipboard_fixture::run as run_synthetic_clipboard_fixture;
+
+#[cfg(feature = "clipboard")]
+mod peer_protocol;
+#[cfg(feature = "clipboard")]
+mod pilot;
+#[cfg(feature = "clipboard")]
+pub use pilot::run as run_pilot;

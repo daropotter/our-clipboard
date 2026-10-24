@@ -61,6 +61,13 @@ impl BufferedDelivery {
         self.pending = None;
         self.closed = true;
     }
+    #[cfg(feature = "clipboard")]
+    pub(crate) fn pending_event(&self) -> Result<Option<SignedTextEvent>, BufferError> {
+        self.pending
+            .as_ref()
+            .map(|p| SignedTextEvent::from_wire(&p.wire).map_err(BufferError::Verification))
+            .transpose()
+    }
     pub fn pending_source(&self) -> Option<SessionBinding> {
         self.pending.as_ref().map(|p| p.binding)
     }
