@@ -375,13 +375,14 @@ fn session(
                     eprintln!("[{role}] Local order commit failed.");
                 })?;
                 let tracker = protocol.tracker(&event)?;
+                let send_after = event.context().created_boot_ms
+                    + 250
+                    + (40_000 * u64::from(o.drift)).div_ceil(1_000_000 - u64::from(o.drift))
+                    + 8 * o.granularity;
                 outgoing = Some(Outgoing {
                     event,
                     tracker,
-                    send_after: now
-                        + 250
-                        + (40_000 * u64::from(o.drift)).div_ceil(1_000_000 - u64::from(o.drift))
-                        + 8 * o.granularity,
+                    send_after,
                     last_sent: None,
                 });
             }
