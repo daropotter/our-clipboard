@@ -72,6 +72,9 @@ fn non_application_decisions_and_wrong_hash_cannot_be_signed() {
     let e = event(&s);
     let v = e.verify_with_trusted_key(&s.public_key()).unwrap();
     for d in [
+        DeliveryDecision::BufferedIdle {
+            envelope_hash: v.envelope_hash(),
+        },
         DeliveryDecision::OlderCandidate,
         DeliveryDecision::RetiredSequence,
         DeliveryDecision::Skipped(Freshness::Expired),
