@@ -6,7 +6,9 @@ use crate::{
     identity::{DeviceId, DeviceIdentity},
 };
 mod admission;
+mod buffer;
 mod delivery;
+pub use buffer::{BufferError, BufferedDelivery};
 mod durable;
 pub use delivery::{DeliveryDecision, DeliveryError, DeliveryReceiver};
 pub use durable::{DurableAdmission, StateError, probe as durable_probe};

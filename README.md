@@ -434,6 +434,23 @@ signed receipts in both directions, including tampered ACK rejection and
 idempotent per-target progress. Retry/rejection control hashes remain separate
 frame types and never count as application receipts.
 
+## Latest-event retry and Idle buffer
+
+`BufferedDelivery` retains at most one canonical signed envelope in a bounded,
+zeroizing memory buffer. Idle accepts/adopts newer valid winners without calling
+the clipboard actuator or allowing local publication reservations. Leaving Idle
+retries only the latest pending winner with its original TTL and session, using
+a current authenticated clock estimate. Failed writes can retry the same bytes;
+success, expiry/uncertainty, source-session replacement or explicit close clears
+pending text. Close seals the session; reopening requires the usual fresh session.
+`BufferedIdle` is not an application receipt.
+
+The owner must call maintenance while Idle/disconnected to release expired data,
+stop native clipboard observation while Idle and rebaseline it on resume. Native
+lock detection and a network Idle announcement are not yet wired to this API.
+Buffer limits cover the one retained wire value; decoding/verification uses bounded
+scratch copies. Nothing from the buffer is persisted or exposed as history.
+
 ## License
 
 [MIT](LICENSE), copyright 2026 Daro Potter.

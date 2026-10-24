@@ -13,6 +13,7 @@ pub enum DeliveryDecision {
     Skipped(Freshness),
     OlderCandidate,
     RetiredSequence,
+    BufferedIdle { envelope_hash: [u8; 32] },
 }
 /// Single-owner serialized receiver. Keeps one successful application hash, never payload history.
 /// Receipts are memory-only: a restart never fabricates a historical application ACK.
@@ -46,6 +47,38 @@ impl DeliveryReceiver {
         clock: &C,
         mut apply: impl FnMut(&str) -> std::result::Result<(), ()>,
     ) -> std::result::Result<DeliveryDecision, DeliveryError> {
+        self.receive_inner(event, estimate, clock, &mut apply, true)
+    }
+    pub(super) fn defer<C: BootClock>(
+        &mut self,
+        event: &VerifiedTextEvent<'_>,
+        estimate: &ClockEstimate,
+        clock: &C,
+    ) -> Result<DeliveryDecision, DeliveryError> {
+        self.receive_inner(
+            event,
+            estimate,
+            clock,
+            &mut |_| unreachable!("Idle never invokes actuator"),
+            false,
+        )
+    }
+    pub(super) fn assess(
+        &self,
+        event: &VerifiedTextEvent<'_>,
+        estimate: &ClockEstimate,
+        now: u64,
+    ) -> Result<Freshness, ClockError> {
+        self.state.assess(event, estimate, now)
+    }
+    fn receive_inner<C: BootClock>(
+        &mut self,
+        event: &VerifiedTextEvent<'_>,
+        estimate: &ClockEstimate,
+        clock: &C,
+        apply: &mut impl FnMut(&str) -> Result<(), ()>,
+        allow_apply: bool,
+    ) -> Result<DeliveryDecision, DeliveryError> {
         let now = clock.now_ms().map_err(DeliveryError::Clock)?;
         let decision = self
             .state
@@ -74,6 +107,11 @@ impl DeliveryReceiver {
             .map_err(DeliveryError::Clock)?;
         if freshness != Freshness::Fresh {
             return Ok(DeliveryDecision::Skipped(freshness));
+        }
+        if !allow_apply {
+            return Ok(DeliveryDecision::BufferedIdle {
+                envelope_hash: hash,
+            });
         }
         apply(event.text()).map_err(|_| DeliveryError::ApplyFailed)?;
         self.applied = Some(hash);
