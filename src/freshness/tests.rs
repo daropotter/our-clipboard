@@ -1,11 +1,11 @@
 use super::*;
 use crate::events::{EventContext, SignedTextEvent};
-struct Fixture {
-    source: DeviceIdentity,
-    binding: ClockBinding,
+pub(super) struct Fixture {
+    pub(super) source: DeviceIdentity,
+    pub(super) binding: ClockBinding,
 }
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let source = DeviceIdentity::generate().unwrap();
         let receiver = DeviceIdentity::generate().unwrap();
         let binding = ClockBinding {
@@ -21,7 +21,7 @@ impl Fixture {
     fn policy() -> ClockPolicy {
         ClockPolicy::new(100, 120_000, Some(0), Some(0)).unwrap()
     }
-    fn estimate(&self) -> ClockEstimate {
+    pub(super) fn estimate(&self) -> ClockEstimate {
         self.sample(40_000, 40_000, 50_000, 50_000)
     }
     fn sample(
@@ -38,7 +38,7 @@ impl Fixture {
             .finish(&reply, &self.source.public_key(), received, Self::policy())
             .unwrap()
     }
-    fn receiver(&self, ready: u64) -> ReceiverSession {
+    pub(super) fn receiver(&self, ready: u64) -> ReceiverSession {
         ReceiverSession::after_authenticated_handshake(
             ReceiverBinding {
                 group: self.binding.group,
@@ -51,7 +51,13 @@ impl Fixture {
         )
         .unwrap()
     }
-    fn event(&self, sequence: u64, lamport: u64, boot: u64, utc: u64) -> SignedTextEvent {
+    pub(super) fn event(
+        &self,
+        sequence: u64,
+        lamport: u64,
+        boot: u64,
+        utc: u64,
+    ) -> SignedTextEvent {
         SignedTextEvent::sign(
             EventContext {
                 group: self.binding.group,
