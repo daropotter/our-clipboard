@@ -472,3 +472,5 @@ mod peer_protocol;
 mod pilot;
 #[cfg(feature = "clipboard")]
 pub use pilot::run as run_pilot;
+
+pub mod outbound;
