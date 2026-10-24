@@ -6,7 +6,7 @@ pub enum AdmissionError {
     LogicalClockExhausted,
     ConflictingOrder,
 }
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct LamportClock {
     value: u64,
 }
@@ -49,16 +49,18 @@ pub enum AdmissionDecision {
     RetiredSequence,
     Skipped(Freshness),
 }
-struct Winner {
-    order: (u64, DeviceId),
-    hash: [u8; 32],
+#[derive(Clone)]
+pub(super) struct Winner {
+    pub(super) order: (u64, DeviceId),
+    pub(super) hash: [u8; 32],
 }
 /// Logical admission only: the actuator must track actual clipboard success/ACK separately.
+#[derive(Clone)]
 pub struct Admission {
-    receiver: ReceiverSession,
-    replay: ReplayGuard,
-    clock: LamportClock,
-    winner: Option<Winner>,
+    pub(super) receiver: ReceiverSession,
+    pub(super) replay: ReplayGuard,
+    pub(super) clock: LamportClock,
+    pub(super) winner: Option<Winner>,
 }
 impl Admission {
     pub fn new(receiver: ReceiverSession, capacity: usize, clock: LamportClock) -> Self {

@@ -6,6 +6,8 @@ use crate::{
     identity::{DeviceId, DeviceIdentity},
 };
 mod admission;
+mod durable;
+pub use durable::{DurableAdmission, StateError, probe as durable_probe};
 mod exchange;
 mod native_clock;
 pub use admission::{Admission, AdmissionDecision, AdmissionError, LamportClock};
@@ -84,6 +86,7 @@ pub struct ReceiverBinding {
     pub session: SessionId,
 }
 /// Keep this running session across accidental reconnects; recreate for restart/manual rejoin.
+#[derive(Clone)]
 pub struct ReceiverSession {
     binding: ReceiverBinding,
     ready_ms: u64,
