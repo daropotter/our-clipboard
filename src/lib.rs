@@ -7,6 +7,7 @@ mod gnome;
 pub mod identity;
 #[cfg(feature = "clipboard")]
 mod origin;
+pub mod receipts;
 #[cfg(feature = "clipboard")]
 pub mod session;
 pub mod text;

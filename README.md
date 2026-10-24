@@ -406,6 +406,30 @@ unchanged. Callback errors may follow partial native effects, so exactly-once
 external writes are not claimed. The callback must return actual completion,
 serialize access and avoid reentry; native operation duration is not bounded here.
 
+## End-to-end application receipts
+
+`SignedApplicationReceipt` binds the full envelope hash, event source/session/
+sequence, group/membership, receiver identity/session and an explicit applied
+status under the receiver's domain-separated Ed25519 signature. It contains no
+clipboard text. Signing accepts only matching `Applied`/`AlreadyApplied`
+decisions; verification requires a receiver key from trusted membership. Signers
+remain responsible for truthful reports: signatures cannot prove an honest OS.
+
+`DeliveryTracker` keeps one event's fixed set of expected receiver sessions (up to
+1024), supplied by authenticated membership/readiness. Only a verified receipt
+from that exact receiver/session advances its progress. A neighbor's ACK never
+confirms other members; duplicates are idempotent and a missing ACK remains
+unconfirmed. Forwarders preserve original receipt bytes and cannot sign for the
+destination. Late original application receipts can be recorded after text TTL
+expires; the ledger does not reinterpret them as new clipboard writes.
+
+This API currently represents successful application only. Idle/buffering, skip
+and error results need separate explicit states; they are not inferred as applied.
+The ledger retains metadata only and is not durable. Its owner must bound the
+number and lifetime of concurrent trackers. Group membership, routing and UI
+integration remain future increments; the current two-clipboard fixture still
+uses its preceding hash-only receipts until the following integration change.
+
 ## License
 
 [MIT](LICENSE), copyright 2026 Daro Potter.
