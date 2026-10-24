@@ -1,5 +1,8 @@
 //! Bounded synthetic protocol; public signing keys/sessions come from trusted setup pipes.
 use super::*;
+use crate::receipts::{
+    DeliveryTracker, ExpectedReceiver, RECEIPT_BYTES, ReceiptDecision, SignedApplicationReceipt,
+};
 use crate::{
     events::{EventContext, SessionBinding, SessionId, SignedTextEvent},
     freshness::{
@@ -28,7 +31,8 @@ fn valid(kind: Kind, n: usize) -> bool {
         Kind::Request => n == 197,
         Kind::Reply => n == 282,
         Kind::Event => (223..=crate::text::MAX_TEXT_BYTES + 222).contains(&n),
-        Kind::Applied | Kind::Retry | Kind::Rejected => n == 32,
+        Kind::Applied => n == RECEIPT_BYTES,
+        Kind::Retry | Kind::Rejected => n == 32,
         Kind::Ready => n == 1,
     }
 }
@@ -216,6 +220,55 @@ impl Protocol {
         )
         .map_err(|_| Error::Frame)
     }
+    pub fn tracker(&self, event: &SignedTextEvent) -> Result<DeliveryTracker> {
+        let verified = event
+            .verify_with_trusted_key(&self.signing.public.key)
+            .map_err(|_| Error::Authentication)?;
+        DeliveryTracker::new(
+            &verified,
+            &[ExpectedReceiver {
+                device: DeviceId::from_public_key(&self.peer.key),
+                session: self.peer.session,
+            }],
+        )
+        .map_err(|_| Error::Frame)
+    }
+    pub fn send_receipt(
+        &self,
+        stream: &mut impl Write,
+        decision: DeliveryDecision,
+        event: &SignedTextEvent,
+        tamper: bool,
+    ) -> Result<()> {
+        let verified = event
+            .verify_with_trusted_key(&self.peer.key)
+            .map_err(|_| Error::Authentication)?;
+        let receipt = SignedApplicationReceipt::sign_applied(
+            &verified,
+            decision,
+            &self.signing.identity,
+            self.signing.public.session,
+        )
+        .map_err(|_| Error::Frame)?;
+        let mut bytes = receipt.to_wire();
+        if tamper {
+            let last = bytes.len() - 1;
+            bytes[last] ^= 1;
+        }
+        send(stream, Kind::Applied, &bytes)
+    }
+    pub fn expect_applied(
+        &self,
+        stream: &mut impl Read,
+        tracker: &mut DeliveryTracker,
+    ) -> Result<ReceiptDecision> {
+        let receipt = SignedApplicationReceipt::from_wire(&receive(stream, Kind::Applied)?)
+            .map_err(|_| Error::Frame)?;
+        let verified = receipt
+            .verify_with_trusted_key(&self.peer.key)
+            .map_err(|_| Error::Authentication)?;
+        tracker.observe(&verified).map_err(|_| Error::Frame)
+    }
     pub fn sign_expired(&mut self, text: &str) -> Result<SignedTextEvent> {
         let event = self.sign(text)?;
         let mut context = event.context();
@@ -260,22 +313,7 @@ pub(super) fn send_event(stream: &mut impl Write, event: &SignedTextEvent) -> Re
     thread::sleep(Duration::from_millis(100));
     send(stream, Kind::Event, &event.to_wire())
 }
-pub(super) fn receipt(
-    stream: &mut impl Write,
-    decision: DeliveryDecision,
-    expected: [u8; 32],
-) -> Result<()> {
-    match decision {
-        DeliveryDecision::Applied { envelope_hash }
-        | DeliveryDecision::AlreadyApplied { envelope_hash }
-            if envelope_hash == expected =>
-        {
-            send(stream, Kind::Applied, &envelope_hash)
-        }
-        _ => Err(Error::Frame),
-    }
-}
-pub(super) fn expect_receipt(
+pub(super) fn expect_control_hash(
     stream: &mut impl Read,
     kind: Kind,
     event: &SignedTextEvent,
@@ -309,7 +347,7 @@ mod tests {
     #[test]
     fn wrong_type_version_and_truncated_frames_are_rejected() {
         let mut bytes = vec![];
-        send(&mut bytes, Kind::Applied, &[1; 32]).unwrap();
+        send(&mut bytes, Kind::Applied, &[1; RECEIPT_BYTES]).unwrap();
         assert!(receive(&mut bytes.as_slice(), Kind::Retry).is_err());
         let mut wrong = bytes.clone();
         wrong[4] = 2;
@@ -317,33 +355,10 @@ mod tests {
         assert!(receive(&mut &bytes[..bytes.len() - 1], Kind::Applied).is_err());
     }
     #[test]
-    fn receipts_are_bound_to_the_expected_envelope() {
-        let identity = SigningPeer::new().unwrap();
-        let event = SignedTextEvent::sign(
-            EventContext {
-                group: GROUP,
-                membership: MEMBERSHIP,
-                session: identity.public.session,
-                sequence: 1,
-                lamport: 1,
-                created_unix_ms: 1,
-                created_boot_ms: 1,
-                ttl_ms: TTL,
-            },
-            "synthetic",
-            &identity.identity,
-        )
-        .unwrap();
+    fn hash_only_ack_cannot_be_mistaken_for_signed_application_receipt() {
+        assert!(send(&mut vec![], Kind::Applied, &[0; 32]).is_err());
         let mut bytes = vec![];
-        send(&mut bytes, Kind::Applied, &[0; 32]).unwrap();
-        assert!(expect_receipt(&mut bytes.as_slice(), Kind::Applied, &event).is_err());
-        assert!(
-            receipt(
-                &mut vec![],
-                DeliveryDecision::OlderCandidate,
-                event.envelope_hash()
-            )
-            .is_err()
-        );
+        send(&mut bytes, Kind::Retry, &[0; 32]).unwrap();
+        assert!(receive(&mut bytes.as_slice(), Kind::Applied).is_err());
     }
 }
