@@ -283,14 +283,14 @@ impl DurableAdmission {
                 EventError::InvalidContext,
             )));
         }
-        if let Some(w) = &self.state.winner {
-            if w.order == event.order_key() {
-                return if w.hash == event.envelope_hash() {
-                    Ok(())
-                } else {
-                    Err(StateError::Admission(AdmissionError::ConflictingOrder))
-                };
-            }
+        if let Some(w) = &self.state.winner
+            && w.order == event.order_key()
+        {
+            return if w.hash == event.envelope_hash() {
+                Ok(())
+            } else {
+                Err(StateError::Admission(AdmissionError::ConflictingOrder))
+            };
         }
         let mut next = self.state.clone();
         next.winner = Some(admission::Winner {
