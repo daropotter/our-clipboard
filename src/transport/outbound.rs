@@ -22,6 +22,7 @@ const MAX_WAITING: usize = 16;
 pub enum RelayError {
     Configuration,
     Authentication,
+    PeerAuthentication,
     Transport,
     Protocol,
     Capacity,
@@ -34,7 +35,10 @@ impl RelayError {
                 "Invalid relay configuration, public offer, or missing OUR_CLIPBOARD_RELAY_TOKEN."
             }
             Self::Authentication => {
-                "Relay or peer authentication failed; no clipboard session was established."
+                "Relay TLS/access authentication failed; check the relay CA and access credential."
+            }
+            Self::PeerAuthentication => {
+                "Peer end-to-end TLS setup failed: offer/role mismatch or rendezvous timeout."
             }
             Self::Transport => "Outbound relay transport failed.",
             Self::Protocol => "Relay protocol rejected invalid data.",
@@ -153,6 +157,7 @@ struct Network {
 }
 impl Network {
     fn new(socket: TcpStream) -> io::Result<Self> {
+        socket.set_nodelay(true)?;
         socket.set_nonblocking(true)?;
         Ok(Self {
             socket,
@@ -483,7 +488,7 @@ pub fn connect(identity: &RelayIdentity, options: RelayOptions<'_>) -> R<RelayPa
             conn.set_buffer_limit(Some(MAX_FRAME * 2));
             while conn.is_handshaking() {
                 conn.complete_io(&mut stream)
-                    .map_err(|_| RelayError::Authentication)?;
+                    .map_err(|_| RelayError::PeerAuthentication)?;
             }
             Secure::A(StreamOwned::new(conn, stream))
         }
@@ -495,7 +500,7 @@ pub fn connect(identity: &RelayIdentity, options: RelayOptions<'_>) -> R<RelayPa
             conn.set_buffer_limit(Some(MAX_FRAME * 2));
             while conn.is_handshaking() {
                 conn.complete_io(&mut stream)
-                    .map_err(|_| RelayError::Authentication)?;
+                    .map_err(|_| RelayError::PeerAuthentication)?;
             }
             Secure::B(StreamOwned::new(conn, stream))
         }

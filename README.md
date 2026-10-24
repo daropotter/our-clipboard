@@ -4,17 +4,20 @@ Clipboard sharing between trusted computers, without a permanent host.
 
 ## Status
 
-Early development. An opt-in [interactive SSH pilot](docs/PILOT.md) can synchronize
-new text copies between two Unix desktops. Production pairing, group routing and
+Early development. An opt-in [outbound-only WSS pilot](docs/OUTBOUND-PILOT.md) can synchronize
+new text copies between X11 and macOS through a separately operated relay. Production pairing, group routing and
 background operation remain under development. This repository grows through
 small, tested pull requests. Planned targets are Windows, macOS,
 and Linux (X11 and native Wayland); these are goals, not verified support claims.
 
 ## Try X11 ↔ macOS
 
-Build this revision on both machines and follow [the pilot guide](docs/PILOT.md).
-It uses an already trusted SSH connection, explicit clipboard consent, signed
-events, original TTL and receiver ACKs. Wait for both READY statuses before copying.
+Build this revision on both machines and follow [the outbound pilot guide](docs/OUTBOUND-PILOT.md).
+Both computers connect out to WSS/443; neither needs SSH or a listening socket.
+A separate reachable relay, transport access credential and independent peer
+fingerprint confirmations are required. Signed events, original TTL and receiver
+ACKs remain active. Wait for both READY statuses before copying.
+The optional [SSH pilot](docs/PILOT.md) is available only where policy allows it.
 This is supervised testing; automatic lock/Idle integration is not connected yet.
 
 ## Direction
@@ -38,8 +41,13 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
+Network unit tests start loopback relay fixtures; use isolated CI/containers when
+workstation policy forbids listeners. Building and running the outbound client
+does not start those fixtures.
+
 The CLI provides help, version information, and runtime platform diagnostics.
-The `doctor` command does not read the clipboard. Client and relay commands are not available yet.
+The `doctor` command does not read the clipboard. A supervised pilot and a separately operated headless WSS relay are available;
+production client enrollment and background operation remain under development.
 CI runs formatting, linting, and CLI tests on Linux, Windows, and macOS.
 This does not verify graphical clipboard access on those systems.
 All source code, documentation, and pull requests use English.
@@ -500,7 +508,7 @@ slots cannot displace a waiting client. Routing room IDs are public metadata,
 not peer authentication. Peer offers must be verified through an independent
 trusted channel; the relay cannot supply its own key as a trusted peer.
 
-This is a transport foundation, not yet wired into the clipboard pilot. Operator
+The outbound-only clipboard pilot uses this transport; see [its guide](docs/OUTBOUND-PILOT.md). Operator
 provisioning, per-user quotas, credential rotation, hardened public hosting,
 HTTP CONNECT proxies and production group enrollment remain future work. Tests
 exercise real WSS plus inner mutual TLS, wrong peer/relay/access credentials,

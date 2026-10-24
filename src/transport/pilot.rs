@@ -1,4 +1,5 @@
 //! Explicit two-machine pilot over pretrusted SSH. No discovery, persistent pairing or OS Idle hooks.
+use super::outbound::{self, AccessToken, PublicOffer, RelayIdentity, Room, Side};
 use super::peer_protocol::{self as wire, Kind, Protocol, PublicPeer, Settings, SigningPeer};
 use super::*;
 use crate::{
@@ -6,6 +7,11 @@ use crate::{
     freshness::{ClockEstimate, ClockPolicy, ClockProbe, DeliveryDecision},
     receipts::DeliveryTracker,
     session::ClipboardSession,
+};
+use std::{
+    fs::{File, OpenOptions},
+    io::{BufRead, BufReader},
+    path::Path,
 };
 use std::{
     io::IsTerminal,
@@ -29,6 +35,12 @@ struct Options {
     stdio: bool,
     host: Option<String>,
     program: Option<String>,
+    relay: Option<String>,
+    room: Option<Room>,
+    side: Option<Side>,
+    offer: Option<String>,
+    peer_offer: Option<String>,
+    relay_ca: Option<String>,
     seconds: u64,
     ttl: u32,
     drift: u32,
@@ -39,6 +51,12 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
         stdio: false,
         host: None,
         program: None,
+        relay: None,
+        room: None,
+        side: None,
+        offer: None,
+        peer_offer: None,
+        relay_ca: None,
         seconds: 300,
         ttl: 30_000,
         drift: 0,
@@ -66,6 +84,28 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
         let v = args.get(i).ok_or("Missing pilot option value.")?;
         i += 1;
         match name {
+            "--relay" => {
+                if !v.starts_with("wss://") {
+                    return Err("Relay requires a wss:// URL.");
+                }
+                o.relay = Some(v.clone())
+            }
+            "--room" => {
+                o.room =
+                    Some(Room::parse(v).map_err(
+                        |_| "Room must be a nonzero 64-character hexadecimal routing ID.",
+                    )?)
+            }
+            "--side" => {
+                o.side = Some(match v.as_str() {
+                    "a" => Side::A,
+                    "b" => Side::B,
+                    _ => return Err("Relay side must be a or b."),
+                })
+            }
+            "--offer" => o.offer = Some(v.clone()),
+            "--peer-offer" => o.peer_offer = Some(v.clone()),
+            "--relay-ca" => o.relay_ca = Some(v.clone()),
             "--ssh" => {
                 if v.is_empty()
                     || v.starts_with('-')
@@ -122,12 +162,32 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
             "Pilot requires explicit --max-drift-ppm and --clock-granularity-ms assumptions.",
         );
     }
-    if o.stdio {
-        if o.host.is_some() || o.program.is_some() {
-            return Err("Use either internal --stdio or --ssh with --remote-program.");
+    if o.relay.is_some() {
+        if o.stdio || o.host.is_some() || o.program.is_some() {
+            return Err("Do not mix relay and SSH/stdio options.");
         }
-    } else if o.host.is_none() || o.program.is_none() {
-        return Err("Pilot requires --ssh and --remote-program.");
+        if o.room.is_none() || o.side.is_none() || o.offer.is_none() || o.peer_offer.is_none() {
+            return Err("Relay pilot requires --room, --side, --offer and --peer-offer.");
+        }
+        if o.offer == o.peer_offer {
+            return Err("Own and peer public offer paths must differ.");
+        }
+    } else {
+        if o.room.is_some()
+            || o.side.is_some()
+            || o.offer.is_some()
+            || o.peer_offer.is_some()
+            || o.relay_ca.is_some()
+        {
+            return Err("Relay options require --relay.");
+        }
+        if o.stdio {
+            if o.host.is_some() || o.program.is_some() {
+                return Err("Use either internal --stdio or --ssh with --remote-program.");
+            }
+        } else if o.host.is_none() || o.program.is_none() {
+            return Err("Pilot requires --relay or --ssh with --remote-program.");
+        }
     }
     if o.seconds * 1000 <= u64::from(o.ttl) + 1000 {
         return Err("Pilot duration must exceed its quiet period by at least one second.");
@@ -232,7 +292,13 @@ fn session(
     mut output: impl Write + Send + 'static,
     o: &Options,
 ) -> Result<()> {
-    let role = if o.stdio { "remote" } else { "local" };
+    let role = if o.relay.is_some() {
+        if o.side == Some(Side::A) { "a" } else { "b" }
+    } else if o.stdio {
+        "remote"
+    } else {
+        "local"
+    };
     let signing = SigningPeer::new()?;
     let own = signing.public();
     own.send(&mut output)?;
@@ -275,7 +341,7 @@ fn session(
     let mut outgoing: Option<Outgoing> = None;
     let mut next_retry = started;
     eprintln!(
-        "[{role}] Pilot connected over pretrusted SSH. Waiting through the new-session quiet period; startup contents are ignored."
+        "[{role}] Authenticated pilot connected. Waiting through the new-session quiet period; startup contents are ignored."
     );
     while wire::now()? < end {
         let now = wire::now()?;
@@ -446,6 +512,94 @@ fn session(
     eprintln!("[{role}] Pilot duration ended; temporary session buffers discarded.");
     Ok(())
 }
+fn save_offer(path: &Path, offer: &PublicOffer) -> std::result::Result<(), &'static str> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(
+            |_| "Public offer path must be new and writable; existing files are never replaced.",
+        )?;
+    file.write_all(&offer.to_wire())
+        .and_then(|_| file.sync_all())
+        .map_err(|_| "Could not save public offer.")
+}
+fn wait_offer(path: &Path) -> std::result::Result<PublicOffer, &'static str> {
+    let until = Instant::now() + Duration::from_secs(300);
+    loop {
+        match File::open(path) {
+            Ok(file) => {
+                if !file
+                    .metadata()
+                    .map_err(|_| "Could not inspect peer offer.")?
+                    .is_file()
+                {
+                    return Err("Peer offer must be a regular file.");
+                }
+                let mut bytes = Vec::new();
+                file.take(32_778)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| "Could not read peer offer.")?;
+                return PublicOffer::from_wire(&bytes)
+                    .map_err(|_| "Peer public offer is invalid or oversized.");
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && Instant::now() < until => {
+                thread::sleep(Duration::from_millis(100))
+            }
+            Err(_) => return Err("Peer public offer unavailable or wait expired."),
+        }
+    }
+}
+fn confirm_peer(input: &mut impl BufRead, expected: &str) -> std::result::Result<(), &'static str> {
+    let mut text = String::new();
+    input
+        .take(80)
+        .read_line(&mut text)
+        .map_err(|_| "Could not read fingerprint confirmation.")?;
+    if text.trim() != expected {
+        return Err(
+            "Peer fingerprint confirmation failed; no network pairing or clipboard access occurred.",
+        );
+    }
+    Ok(())
+}
+fn relay_pilot(o: &Options) -> std::result::Result<(), &'static str> {
+    let token = AccessToken::from_env().map_err(|e| e.message())?;
+    let outer =
+        outbound::relay_roots(o.relay_ca.as_deref().map(Path::new)).map_err(|e| e.message())?;
+    let identity = RelayIdentity::generate().map_err(|e| e.message())?;
+    let offer = identity.public_offer();
+    save_offer(Path::new(o.offer.as_ref().unwrap()), &offer)?;
+    eprintln!(
+        "Own PUBLIC offer saved. Fingerprint: {}",
+        offer.fingerprint()
+    );
+    eprintln!(
+        "Transfer only this public offer by your chosen channel; waiting up to five minutes for the peer offer."
+    );
+    let peer = wait_offer(Path::new(o.peer_offer.as_ref().unwrap()))?;
+    eprintln!("Received PUBLIC peer offer: {}", peer.fingerprint());
+    eprintln!(
+        "Compare with the other computer's OWN fingerprint through an independent trusted channel, then type that full fingerprint and press Enter:"
+    );
+    confirm_peer(
+        &mut BufReader::new(std::io::stdin().lock()),
+        &peer.fingerprint(),
+    )?;
+    let (reader, writer, _lifetime) = outbound::connect(
+        &identity,
+        outbound::RelayOptions {
+            url: o.relay.as_ref().unwrap(),
+            room: o.room.unwrap(),
+            side: o.side.unwrap(),
+            token: &token,
+            peer: &peer,
+            outer,
+        },
+    )
+    .map_err(|e| e.message())?;
+    session(reader,writer,o).map_err(|_|"Relay pilot stopped: transport, clock or clipboard operation failed; content and private keys omitted.")
+}
 // clipboard-rs emits unstructured stdout diagnostics on X11 ownership changes.
 // A pilot exclusively owns this process: preserve its binary output pipe, then
 // suppress dependency stdout so diagnostics can never corrupt protocol frames.
@@ -468,7 +622,7 @@ fn protocol_stdout() -> std::result::Result<std::fs::File, &'static str> {
 }
 pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
     if matches!(args,[arg] if arg=="--help"||arg=="-h") {
-        return Ok("Usage: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nRequires existing SSH key authentication and a pinned known_hosts entry. Wait for both READY statuses before copying new text. Linux/macOS only; supervised testing, no automatic lock/Idle integration. See docs/PILOT.md.".into());
+        return Ok("Usage: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nRelay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
     }
     let o = options(args)?;
     #[cfg(target_os = "linux")]
@@ -484,6 +638,11 @@ pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
         return Err("Internal pilot --stdio requires a pipe, never a terminal.");
     }
     let output = protocol_stdout()?;
+    if o.relay.is_some() {
+        drop(output);
+        relay_pilot(&o)?;
+        return Ok(String::new());
+    }
     let result = if o.stdio {
         session(std::io::stdin(), output, &o)
     } else {
@@ -522,5 +681,72 @@ mod tests {
     #[test]
     fn remote_paths_are_shell_quoted() {
         assert_eq!(quoted("/a b/it's"), "'/a b/it'\\''s'");
+    }
+}
+
+#[cfg(test)]
+mod relay_tests {
+    use super::*;
+    #[test]
+    fn relay_requires_complete_role_and_never_mixes_with_ssh() {
+        let base = [
+            "--replace-clipboard",
+            "--relay",
+            "wss://relay.example/our-clipboard/v1",
+            "--room",
+            &"1".repeat(64),
+            "--side",
+            "a",
+            "--offer",
+            "own.offer",
+            "--peer-offer",
+            "peer.offer",
+            "--max-drift-ppm",
+            "1000",
+            "--clock-granularity-ms",
+            "1",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+        assert!(options(&base).is_ok());
+        let mut mixed = base.clone();
+        mixed.extend(["--stdio".into()]);
+        assert!(options(&mixed).is_err());
+        let mut same = base.clone();
+        same[10] = "own.offer".into();
+        assert!(options(&same).is_err());
+        let mut plaintext = base;
+        plaintext[2] = "ws://relay.example/our-clipboard/v1".into();
+        assert!(options(&plaintext).is_err());
+    }
+    #[test]
+    fn independent_fingerprint_confirmation_is_exact_and_bounded() {
+        let expected = RelayIdentity::generate()
+            .unwrap()
+            .public_offer()
+            .fingerprint();
+        assert!(
+            confirm_peer(
+                &mut std::io::Cursor::new(format!("{expected}\n")),
+                &expected
+            )
+            .is_ok()
+        );
+        for wrong in ["yes".to_string(), "0".repeat(1000), String::new()] {
+            assert!(confirm_peer(&mut std::io::Cursor::new(wrong), &expected).is_err());
+        }
+    }
+    #[test]
+    fn public_offer_output_never_replaces_existing_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let offer = RelayIdentity::generate().unwrap().public_offer();
+        let path = directory.path().join("public.offer");
+        save_offer(&path, &offer).unwrap();
+        assert!(save_offer(&path, &offer).is_err());
+        assert_eq!(
+            wait_offer(&path).unwrap().fingerprint(),
+            offer.fingerprint()
+        );
     }
 }
