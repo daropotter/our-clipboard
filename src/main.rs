@@ -15,8 +15,10 @@ Commands:
               Replace the clipboard with synthetic text and verify access
   watch-probe --observe-clipboard <seconds>
               Count native clipboard notifications without reading text (1-60 seconds)
+  pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 ...
+              Outbound-only interactive pilot; see docs/OUTBOUND-PILOT.md
   pilot --replace-clipboard --ssh <user@host> --remote-program <absolute-path>
-              Interactive SSH pilot; requires explicit clock bounds (see README)
+              Optional SSH pilot; requires explicit clock bounds (see README)
   state-probe      Check temporary durable counters across restart
   freshness-probe  Check suspend-aware clocks and synthetic age decisions
   envelope-probe   Check synthetic signed envelopes and replay filtering
@@ -101,7 +103,7 @@ fn run(args: &[String]) -> Result<String, &'static str> {
             std::env::consts::OS,
             std::env::consts::ARCH,
             if cfg!(feature = "clipboard") {
-                "supervised SSH pilot available"
+                "supervised relay/SSH pilot available"
             } else {
                 "clipboard integration disabled"
             }
