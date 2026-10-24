@@ -10,6 +10,8 @@ const MAGIC: &[u8; 5] = b"OCSE\x01";
 const DOMAIN: &[u8] = b"our-clipboard/signed-text-event/v1\0";
 const HEADER: usize = 158;
 const SIGNATURE: usize = 64;
+/// Fixed header and signature bytes in the version-one text-event encoding.
+pub const TEXT_EVENT_WIRE_OVERHEAD: usize = HEADER + SIGNATURE;
 pub const DEFAULT_TTL_MS: u32 = 30_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
