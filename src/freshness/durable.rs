@@ -221,6 +221,26 @@ impl DurableAdmission {
         store.save(&store.state.clone(), sequence, capacity)?;
         Ok(store)
     }
+    #[cfg(test)]
+    pub(super) fn fail_writes_for_test(&self) {
+        self.connection
+            .execute_batch("PRAGMA query_only=ON")
+            .unwrap();
+    }
+    pub(super) fn is_winner(&self, event: &VerifiedTextEvent<'_>) -> bool {
+        self.state
+            .winner
+            .as_ref()
+            .is_some_and(|w| w.order == event.order_key() && w.hash == event.envelope_hash())
+    }
+    pub(super) fn assess(
+        &self,
+        event: &VerifiedTextEvent<'_>,
+        estimate: &ClockEstimate,
+        now: u64,
+    ) -> Result<Freshness, ClockError> {
+        estimate.assess(event, &self.state.receiver, now)
+    }
     pub fn clock(&self) -> u64 {
         self.state.clock()
     }

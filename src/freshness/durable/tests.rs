@@ -1,6 +1,6 @@
 // Forked crash helpers can briefly inherit other test threads' locks before exec.
 // Serialize this module so a test never mistakes that inheritance for a second owner.
-static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+use super::super::STATE_TEST_LOCK as SERIAL;
 fn private_directory() -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
     #[cfg(unix)]

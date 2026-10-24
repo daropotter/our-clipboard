@@ -371,6 +371,23 @@ fall back to `initialize`. Tests exercise actual child-process exit with an open
 transaction, reopen, replay retention, write failure, scope/version validation,
 capacity and counter exhaustion. Production transport integration remains pending.
 
+## Applying admitted deliveries
+
+`DeliveryReceiver` wraps `DurableAdmission` and a synchronous text-write callback.
+Only `Applied` or `AlreadyApplied` can become an application receipt, bound to the
+full signed-envelope hash and sent over an authenticated channel. Admission or
+queue acceptance is never enough. A failed write can retry the exact envelope
+while it remains fresh and selected; a newer winner supersedes that retry.
+Successful duplicates do not write again or advance Lamport. Freshness is checked
+again after durable commit, immediately before invoking the actuator.
+
+The receiver retains one application hash in memory, no payload history. After
+restart, retired sequences cannot manufacture application receipts. A receipt
+means the callback reported a successful write, not that the clipboard is still
+unchanged. Callback errors may follow partial native effects, so exactly-once
+external writes are not claimed. The callback must return actual completion,
+serialize access and avoid reentry; native operation duration is not bounded here.
+
 ## License
 
 [MIT](LICENSE), copyright 2026 Daro Potter.

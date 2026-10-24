@@ -6,7 +6,9 @@ use crate::{
     identity::{DeviceId, DeviceIdentity},
 };
 mod admission;
+mod delivery;
 mod durable;
+pub use delivery::{DeliveryDecision, DeliveryError, DeliveryReceiver};
 pub use durable::{DurableAdmission, StateError, probe as durable_probe};
 mod exchange;
 mod native_clock;
@@ -257,3 +259,7 @@ pub fn probe() -> Result<String, ClockError> {
 }
 #[cfg(test)]
 mod tests;
+
+// Crash helpers briefly inherit open file locks during fork, before exec closes them.
+#[cfg(test)]
+pub(super) static STATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
