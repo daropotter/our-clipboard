@@ -12,6 +12,19 @@ use std::{
     process::{Child, Command, Stdio},
     sync::mpsc::{self, SyncSender, TrySendError},
 };
+// Bound network work per iteration so native observation/retries remain serviceable.
+const MAX_FRAMES_PER_TICK: usize = 8;
+const PROBE_TIMEOUT_MS: u64 = 1000;
+const PROBE_INTERVAL_MS: u64 = 5000;
+const NATIVE_POLL_MS: u64 = 15;
+// RTT uncertainty (at most 100 ms) plus scheduling slack, without renewing TTL.
+const BASE_SEND_HOLDBACK_MS: u64 = 250;
+// assess() includes elapsed sample age AND distance from the source sample.
+// Two 20-second lifetimes give 40_000 MILLISECONDS, not a 40 ms RTT assumption.
+const DRIFT_HORIZON_MS: u64 = 2 * wire::CLOCK_SAMPLE_LIFETIME_MS;
+const GRANULARITY_MARGIN_MULTIPLIER: u64 = 8;
+const APPLY_RETRY_INTERVAL_MS: u64 = 250;
+const SEND_RETRY_INTERVAL_MS: u64 = 500;
 struct Options {
     stdio: bool,
     host: Option<String>,
@@ -205,8 +218,13 @@ fn settings(own: PublicPeer, peer: PublicPeer, o: &Options) -> Result<Settings> 
         group,
         membership,
         ttl: o.ttl,
-        policy: ClockPolicy::new(100, 20_000, Some(o.drift), Some(o.granularity))
-            .map_err(|_| Error::Setup)?,
+        policy: ClockPolicy::new(
+            wire::CLOCK_MAX_RTT_MS,
+            wire::CLOCK_SAMPLE_LIFETIME_MS,
+            Some(o.drift),
+            Some(o.granularity),
+        )
+        .map_err(|_| Error::Setup)?,
     })
 }
 fn session(
@@ -262,7 +280,7 @@ fn session(
     while wire::now()? < end {
         let now = wire::now()?;
         // Reader/writer queues each hold one bounded frame; backpressure never blocks the event loop.
-        for _ in 0..8 {
+        for _ in 0..MAX_FRAMES_PER_TICK {
             match incoming.try_recv() {
                 Ok(Ok((kind, bytes))) => match kind {
                     Kind::Request => {
@@ -338,7 +356,7 @@ fn session(
         }
         if pending_probe
             .as_ref()
-            .is_some_and(|(_, at)| now.saturating_sub(*at) > 1000)
+            .is_some_and(|(_, at)| now.saturating_sub(*at) > PROBE_TIMEOUT_MS)
         {
             pending_probe = None;
             next_probe = now;
@@ -347,7 +365,7 @@ fn session(
             let probe = protocol.start_probe()?;
             if queue(&writer, Kind::Request, probe.request().to_wire())? {
                 pending_probe = Some((probe, now));
-                next_probe = now + 5000;
+                next_probe = now + PROBE_INTERVAL_MS;
             }
         }
         if !sent_ready && estimate.is_some() && protocol.ready()? {
@@ -361,13 +379,12 @@ fn session(
         }
         if let Some(session) = &mut clipboard {
             // Poll native local changes before retrying remote state, preserving local-copy order.
-            if let Some(text) =
-                session
-                    .next_local_text(Duration::from_millis(15))
-                    .map_err(|_| {
-                        eprintln!("[{role}] Native clipboard observation failed.");
-                        Error::Worker
-                    })?
+            if let Some(text) = session
+                .next_local_text(Duration::from_millis(NATIVE_POLL_MS))
+                .map_err(|_| {
+                    eprintln!("[{role}] Native clipboard observation failed.");
+                    Error::Worker
+                })?
             {
                 eprintln!("[{role}] New local copy selected.");
                 let event = protocol.sign(&text)?;
@@ -376,9 +393,10 @@ fn session(
                 })?;
                 let tracker = protocol.tracker(&event)?;
                 let send_after = event.context().created_boot_ms
-                    + 250
-                    + (40_000 * u64::from(o.drift)).div_ceil(1_000_000 - u64::from(o.drift))
-                    + 8 * o.granularity;
+                    + BASE_SEND_HOLDBACK_MS
+                    + (DRIFT_HORIZON_MS * u64::from(o.drift))
+                        .div_ceil(1_000_000 - u64::from(o.drift))
+                    + GRANULARITY_MARGIN_MULTIPLIER * o.granularity;
                 outgoing = Some(Outgoing {
                     event,
                     tracker,
@@ -404,7 +422,7 @@ fn session(
                     )?;
                     eprintln!("[{role}] Applied pending peer event.");
                 }
-                next_retry = now + 250;
+                next_retry = now + APPLY_RETRY_INTERVAL_MS;
             }
         } else {
             thread::sleep(Duration::from_millis(5));
@@ -419,7 +437,7 @@ fn session(
             && now >= out.send_after
             && out
                 .last_sent
-                .is_none_or(|last| now.saturating_sub(last) >= 500)
+                .is_none_or(|last| now.saturating_sub(last) >= SEND_RETRY_INTERVAL_MS)
             && queue(&writer, Kind::Event, out.event.to_wire())?
         {
             out.last_sent = Some(now);
@@ -433,6 +451,8 @@ fn session(
 // suppress dependency stdout so diagnostics can never corrupt protocol frames.
 #[cfg(unix)]
 fn protocol_stdout() -> std::result::Result<std::fs::File, &'static str> {
+    // The descriptor is dynamically allocated at or above 3, not fixed to fd 3.
+    // The clipboard backend is an in-process library, so it has no Child stdout to pipe.
     let output = rustix::io::fcntl_dupfd_cloexec(std::io::stdout(), 3)
         .map_err(|_| "Could not isolate pilot output.")?;
     let sink = std::fs::OpenOptions::new()

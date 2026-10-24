@@ -53,6 +53,20 @@ every five seconds and stops rather than falling back to UTC if safe age
 assessment fails. A small bounded delay before sending keeps messages away from
 clock uncertainty boundaries; it does not renew TTL.
 
+The example's 1000 ppm means a 0.1% bound on relative clock-rate difference;
+1 ms is an assumed clock-read granularity bound. These are supervised-test
+parameters, not certified values for typical hardware. Validating deployment
+bounds requires comparing both counters to an independent elapsed-time reference
+across normal operation and suspend/resume, accounting for both devices' rate
+errors and quantization with margin. Native counter units and successful RTT
+samples alone do not establish those worst-case bounds.
+
+The send holdback uses a **40-second drift horizon**: two 20-second calibration
+lifetimes for elapsed sample age and source-timestamp distance. It is independent
+of the 100 ms maximum measured RTT; the base delay and granularity margin are
+additional. Clock-policy errors should be reported with content-free statuses;
+changing the assumptions is a new test policy, not proof that the clocks improved.
+
 Wait for **both `[local] READY` and `[remote] READY`**. With the default 30-second
 TTL, readiness includes approximately 30 seconds of new-session quiet time. The
 native observers start afterward; preexisting clipboard contents are not sent.

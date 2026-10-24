@@ -6,7 +6,7 @@ use crate::receipts::{
 };
 use crate::session::ClipboardSession;
 use crate::{
-    events::{EventContext, SessionBinding, SessionId, SignedTextEvent},
+    events::{EventContext, SessionBinding, SessionId, SignedTextEvent, TEXT_EVENT_WIRE_OVERHEAD},
     freshness::{
         BootClock, ClockBinding, ClockEstimate, ClockPolicy, ClockProbe, ClockReply, ClockRequest,
         DeliveryDecision, DeliveryError, DeliveryReceiver, DurableAdmission, ReceiverBinding,
@@ -14,6 +14,11 @@ use crate::{
     },
     identity::{DeviceId, DeviceIdentity},
 };
+pub(super) const CLOCK_MAX_RTT_MS: u64 = 100;
+pub(super) const CLOCK_SAMPLE_LIFETIME_MS: u64 = 20_000;
+// Avoid creating the first event exactly on the uncertain quiet-period boundary.
+// Every candidate still undergoes the full interval-based freshness check.
+const QUIET_BOUNDARY_MARGIN_MS: u64 = 100;
 const TTL: u32 = 2000;
 const GROUP: [u8; 32] = [1; 32];
 const MEMBERSHIP: [u8; 32] = [2; 32];
@@ -32,7 +37,9 @@ fn valid(kind: Kind, n: usize) -> bool {
     match kind {
         Kind::Request => n == 197,
         Kind::Reply => n == 282,
-        Kind::Event => (223..=crate::text::MAX_TEXT_BYTES + 222).contains(&n),
+        Kind::Event => (TEXT_EVENT_WIRE_OVERHEAD + 1
+            ..=crate::text::MAX_TEXT_BYTES + TEXT_EVENT_WIRE_OVERHEAD)
+            .contains(&n),
         Kind::Applied => n == RECEIPT_BYTES,
         Kind::Retry | Kind::Rejected => n == 32,
         Kind::Ready => n == 1,
@@ -145,8 +152,13 @@ impl Protocol {
                 group: GROUP,
                 membership: MEMBERSHIP,
                 ttl: TTL,
-                policy: ClockPolicy::new(100, 20_000, Some(1000), Some(1))
-                    .map_err(|_| Error::Setup)?,
+                policy: ClockPolicy::new(
+                    CLOCK_MAX_RTT_MS,
+                    CLOCK_SAMPLE_LIFETIME_MS,
+                    Some(1000),
+                    Some(1),
+                )
+                .map_err(|_| Error::Setup)?,
             },
         )
     }
@@ -178,7 +190,7 @@ impl Protocol {
             DurableAdmission::initialize(directory.path(), gate, 1).map_err(|_| Error::Worker)?;
         let mut delivery = BufferedDelivery::new(
             DeliveryReceiver::new(state),
-            crate::text::MAX_TEXT_BYTES + 222,
+            crate::text::MAX_TEXT_BYTES + TEXT_EVENT_WIRE_OVERHEAD,
         )
         .map_err(|_| Error::Setup)?;
         delivery
@@ -193,7 +205,7 @@ impl Protocol {
             signing,
             peer,
             delivery,
-            ready_at: now + u64::from(settings.ttl) + 100,
+            ready_at: now + u64::from(settings.ttl) + QUIET_BOUNDARY_MARGIN_MS,
             settings,
             _directory: directory,
         })
