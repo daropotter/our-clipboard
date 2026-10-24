@@ -166,6 +166,8 @@ impl DurableAdmission {
             (None, None, None) => {}
             (Some(c), Some(source), Some(hash)) => {
                 let c = u64::from_be_bytes(c);
+                // A local copy is selected at its reserved clock; remote admission
+                // increments beyond the remote winner. Both equal and lower are valid.
                 if c == 0 || c > clock {
                     return Err(StateError::InvalidState);
                 }
@@ -268,6 +270,10 @@ impl DurableAdmission {
     }
     /// Record a newly observed local copy after reserving/signing it, before network publication.
     /// A reservation alone has no clipboard contents and is not a selected local winner.
+    /// Serialize reserve_publication -> sign -> record_local_event -> network publication.
+    /// The caller must supply a new, ready local observation with its original timestamps/TTL.
+    /// Interleaved admission invalidates an older reservation: re-evaluate the current local
+    /// observation, reserve again and re-sign explicitly; never rewrite a signed clock here.
     pub fn record_local_event(&mut self, event: &VerifiedTextEvent<'_>) -> Result<(), StateError> {
         self.healthy()?;
         let c = event.context();
