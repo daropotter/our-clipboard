@@ -4,9 +4,18 @@ Clipboard sharing between trusted computers, without a permanent host.
 
 ## Status
 
-Early development. Clipboard synchronization is not implemented yet. This repository
-will grow through small, tested pull requests. Planned targets are Windows, macOS,
+Early development. An opt-in [interactive SSH pilot](docs/PILOT.md) can synchronize
+new text copies between two Unix desktops. Production pairing, group routing and
+background operation remain under development. This repository grows through
+small, tested pull requests. Planned targets are Windows, macOS,
 and Linux (X11 and native Wayland); these are goals, not verified support claims.
+
+## Try X11 ↔ macOS
+
+Build this revision on both machines and follow [the pilot guide](docs/PILOT.md).
+It uses an already trusted SSH connection, explicit clipboard consent, signed
+events, original TTL and receiver ACKs. Wait for both READY statuses before copying.
+This is supervised testing; automatic lock/Idle integration is not connected yet.
 
 ## Direction
 
@@ -122,7 +131,8 @@ have a one-second deadline and a 32-byte limit. A stalled or incomplete transfer
 fails without returning partial text, and progress does not renew the deadline.
 Compositor negotiation before obtaining a pipe and other native blocking calls
 are outside these deadlines. Uniform operation cancellation and native allocation
-limits remain future work. Network synchronization is not implemented yet.
+limits remain future work. General client synchronization is under development;
+the supervised SSH pilot provides a limited two-machine path.
 
 
 ## Native notification probe

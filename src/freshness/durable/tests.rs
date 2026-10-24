@@ -483,3 +483,37 @@ fn unreserved_or_foreign_local_event_cannot_change_winner() {
     assert_eq!(s.clock(), 0);
     assert_eq!(s.winner_source(), None);
 }
+
+#[test]
+fn local_only_winner_reopens_at_equal_clock() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = private_directory();
+    let mut f = Fixture::new();
+    let key = DeviceIdentity::generate().unwrap();
+    f.receiver = key.id();
+    let mut state = DurableAdmission::initialize(dir.path(), f.gate(), 1).unwrap();
+    let (sequence, lamport) = state.reserve_publication().unwrap();
+    let e = SignedTextEvent::sign(
+        EventContext {
+            group: [1; 32],
+            membership: [2; 32],
+            session: f.session,
+            sequence,
+            lamport,
+            created_unix_ms: 1,
+            created_boot_ms: 50_000,
+            ttl_ms: 30_000,
+        },
+        "synthetic local",
+        &key,
+    )
+    .unwrap();
+    state
+        .record_local_event(&e.verify_with_trusted_key(&key.public_key()).unwrap())
+        .unwrap();
+    drop(state);
+    f.restart();
+    let state = DurableAdmission::open(dir.path(), f.gate(), 1).unwrap();
+    assert_eq!(state.clock(), 1);
+    assert_eq!(state.winner_source(), Some(key.id()));
+}

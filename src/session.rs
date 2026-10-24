@@ -31,6 +31,22 @@ impl ClipboardSession {
         self.tagged.apply(text, &self.marker)
     }
 
+    fn is_own(&mut self) -> Result<bool, &'static str> {
+        // TARGETS/marker queries can race a new native selection owner. Retry the
+        // observation rather than treating an inconclusive marker as a local copy.
+        let mut error = "Clipboard marker inspection failed.";
+        for attempt in 0..3 {
+            match self.tagged.is_own(&self.marker) {
+                Ok(own) => return Ok(own),
+                Err(e) => error = e,
+            }
+            if attempt < 2 {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        Err(error)
+    }
+
     /// Return only a new local text observation. Startup contents are not read or emitted.
     pub fn next_local_text(&mut self, timeout: Duration) -> Result<Option<String>, &'static str> {
         let deadline = Instant::now() + timeout;
@@ -38,7 +54,7 @@ impl ClipboardSession {
             if !self.watcher.wait(remaining)? {
                 break;
             }
-            if self.tagged.is_own(&self.marker)? {
+            if self.is_own()? {
                 continue;
             }
             let text = match self.clipboard.get_text() {
@@ -58,7 +74,7 @@ impl ClipboardSession {
                 Err(message) => return Err(message),
             };
             // Applying received data can race a queued notification. Check after reading too.
-            if !self.tagged.is_own(&self.marker)? {
+            if !self.is_own()? {
                 return Ok(Some(text));
             }
         }

@@ -1,8 +1,10 @@
 //! Bounded synthetic protocol; public signing keys/sessions come from trusted setup pipes.
 use super::*;
+use crate::freshness::{BufferError, BufferedDelivery};
 use crate::receipts::{
     DeliveryTracker, ExpectedReceiver, RECEIPT_BYTES, ReceiptDecision, SignedApplicationReceipt,
 };
+use crate::session::ClipboardSession;
 use crate::{
     events::{EventContext, SessionBinding, SessionId, SignedTextEvent},
     freshness::{
@@ -59,10 +61,31 @@ pub(super) fn receive(stream: &mut impl Read, kind: Kind) -> Result<Vec<u8>> {
     stream.read_exact(&mut bytes).map_err(io_error)?;
     Ok(bytes)
 }
+pub(super) fn read_any(stream: &mut impl Read) -> Result<(Kind, Vec<u8>)> {
+    let mut h = [0; 10];
+    stream.read_exact(&mut h).map_err(io_error)?;
+    let kind = match h[5] {
+        1 => Kind::Request,
+        2 => Kind::Reply,
+        3 => Kind::Event,
+        4 => Kind::Applied,
+        5 => Kind::Ready,
+        6 => Kind::Retry,
+        7 => Kind::Rejected,
+        _ => return Err(Error::Frame),
+    };
+    let n = u32::from_be_bytes(h[6..].try_into().map_err(|_| Error::Frame)?) as usize;
+    if &h[..5] != FRAME_MAGIC || !valid(kind, n) {
+        return Err(Error::Frame);
+    }
+    let mut bytes = vec![0; n];
+    stream.read_exact(&mut bytes).map_err(io_error)?;
+    Ok((kind, bytes))
+}
 #[derive(Clone, Copy)]
 pub(super) struct PublicPeer {
-    key: [u8; 32],
-    session: SessionId,
+    pub key: [u8; 32],
+    pub session: SessionId,
 }
 impl PublicPeer {
     pub fn send(&self, out: &mut impl Write) -> Result<()> {
@@ -98,15 +121,40 @@ impl SigningPeer {
         self.public
     }
 }
+#[derive(Clone, Copy)]
+pub(super) struct Settings {
+    pub group: [u8; 32],
+    pub membership: [u8; 32],
+    pub ttl: u32,
+    pub policy: ClockPolicy,
+}
 pub(super) struct Protocol {
     signing: SigningPeer,
     peer: PublicPeer,
-    delivery: DeliveryReceiver,
+    delivery: BufferedDelivery,
+    settings: Settings,
     ready_at: u64,
     _directory: tempfile::TempDir,
 }
 impl Protocol {
     pub fn new(signing: SigningPeer, peer: PublicPeer) -> Result<Self> {
+        Self::with_settings(
+            signing,
+            peer,
+            Settings {
+                group: GROUP,
+                membership: MEMBERSHIP,
+                ttl: TTL,
+                policy: ClockPolicy::new(100, 20_000, Some(1000), Some(1))
+                    .map_err(|_| Error::Setup)?,
+            },
+        )
+    }
+    pub fn with_settings(
+        signing: SigningPeer,
+        peer: PublicPeer,
+        settings: Settings,
+    ) -> Result<Self> {
         let directory = tempfile::tempdir().map_err(io_error)?;
         #[cfg(unix)]
         {
@@ -117,22 +165,26 @@ impl Protocol {
         let now = now()?;
         let gate = ReceiverSession::after_authenticated_handshake(
             ReceiverBinding {
-                group: GROUP,
-                membership: MEMBERSHIP,
+                group: settings.group,
+                membership: settings.membership,
                 receiver: signing.identity.id(),
                 session: signing.public.session,
             },
             now,
-            TTL,
+            settings.ttl,
         )
         .map_err(|_| Error::Frame)?;
         let state =
             DurableAdmission::initialize(directory.path(), gate, 1).map_err(|_| Error::Worker)?;
-        let mut delivery = DeliveryReceiver::new(state);
+        let mut delivery = BufferedDelivery::new(
+            DeliveryReceiver::new(state),
+            crate::text::MAX_TEXT_BYTES + 222,
+        )
+        .map_err(|_| Error::Setup)?;
         delivery
             .activate_authenticated_source(SessionBinding {
-                group: GROUP,
-                membership: MEMBERSHIP,
+                group: settings.group,
+                membership: settings.membership,
                 source: DeviceId::from_public_key(&peer.key),
                 session: peer.session,
             })
@@ -141,14 +193,15 @@ impl Protocol {
             signing,
             peer,
             delivery,
-            ready_at: now + u64::from(TTL) + 100,
+            ready_at: now + u64::from(settings.ttl) + 100,
+            settings,
             _directory: directory,
         })
     }
     fn incoming_binding(&self) -> ClockBinding {
         ClockBinding {
-            group: GROUP,
-            membership: MEMBERSHIP,
+            group: self.settings.group,
+            membership: self.settings.membership,
             source: DeviceId::from_public_key(&self.peer.key),
             source_session: self.peer.session,
             receiver: self.signing.identity.id(),
@@ -162,12 +215,7 @@ impl Protocol {
             ClockReply::from_wire(&receive(stream, Kind::Reply)?).map_err(|_| Error::Frame)?;
         // Explicit test-host assumptions; not production-wide bounds.
         probe
-            .finish(
-                &reply,
-                &self.peer.key,
-                now()?,
-                ClockPolicy::new(100, 20_000, Some(1000), Some(1)).map_err(|_| Error::Frame)?,
-            )
+            .finish(&reply, &self.peer.key, now()?, self.settings.policy)
             .map_err(|_| Error::Frame)
     }
     pub fn answer_clock(&self, stream: &mut (impl Read + Write)) -> Result<()> {
@@ -206,19 +254,117 @@ impl Protocol {
             .as_millis();
         SignedTextEvent::sign(
             EventContext {
-                group: GROUP,
-                membership: MEMBERSHIP,
+                group: self.settings.group,
+                membership: self.settings.membership,
                 session: self.signing.public.session,
                 sequence,
                 lamport,
                 created_unix_ms: u64::try_from(utc).map_err(|_| Error::Setup)?,
                 created_boot_ms: now()?,
-                ttl_ms: TTL,
+                ttl_ms: self.settings.ttl,
             },
             text,
             &self.signing.identity,
         )
         .map_err(|_| Error::Frame)
+    }
+    pub fn ready(&self) -> Result<bool> {
+        Ok(now()? >= self.ready_at)
+    }
+    pub fn receive_live(
+        &mut self,
+        event: &SignedTextEvent,
+        estimate: &ClockEstimate,
+        session: &mut ClipboardSession,
+    ) -> Result<Option<DeliveryDecision>> {
+        match self
+            .delivery
+            .receive(event, &self.peer.key, estimate, &SystemBootClock, |text| {
+                session.apply_received_text(text).map_err(|_| ())
+            }) {
+            Ok(d) => Ok(Some(d)),
+            Err(BufferError::Delivery(DeliveryError::ApplyFailed)) => Ok(None),
+            Err(_) => Err(Error::Frame),
+        }
+    }
+    pub fn start_probe(&self) -> Result<ClockProbe> {
+        ClockProbe::start(self.incoming_binding(), now()?).map_err(|_| Error::Frame)
+    }
+    pub fn finish_probe(&self, probe: ClockProbe, bytes: &[u8]) -> Result<ClockEstimate> {
+        let reply = ClockReply::from_wire(bytes).map_err(|_| Error::Frame)?;
+        probe
+            .finish(&reply, &self.peer.key, now()?, self.settings.policy)
+            .map_err(|_| Error::Frame)
+    }
+    pub fn clock_reply(&self, bytes: &[u8]) -> Result<Vec<u8>> {
+        let request = ClockRequest::from_wire(bytes).map_err(|_| Error::Frame)?;
+        let b = request.binding();
+        let e = self.incoming_binding();
+        let received = now()?;
+        if b.group != e.group
+            || b.membership != e.membership
+            || b.source != e.receiver
+            || b.receiver != e.source
+            || b.source_session != e.receiver_session
+            || b.receiver_session != e.source_session
+        {
+            return Err(Error::Frame);
+        }
+        Ok(
+            ClockReply::sign(&request, &self.signing.identity, received, now()?)
+                .map_err(|_| Error::Frame)?
+                .to_wire(),
+        )
+    }
+    pub fn record_local(&mut self, event: &SignedTextEvent) -> Result<()> {
+        let v = event
+            .verify_with_trusted_key(&self.signing.public.key)
+            .map_err(|_| Error::Frame)?;
+        self.delivery
+            .record_local_event(&v)
+            .map_err(|_| Error::Worker)
+    }
+    pub fn receipt_bytes(
+        &self,
+        event: &SignedTextEvent,
+        decision: DeliveryDecision,
+    ) -> Result<Vec<u8>> {
+        let v = event
+            .verify_with_trusted_key(&self.peer.key)
+            .map_err(|_| Error::Frame)?;
+        Ok(SignedApplicationReceipt::sign_applied(
+            &v,
+            decision,
+            &self.signing.identity,
+            self.signing.public.session,
+        )
+        .map_err(|_| Error::Frame)?
+        .to_wire())
+    }
+    pub fn observe_receipt(
+        &self,
+        bytes: &[u8],
+        tracker: &mut DeliveryTracker,
+    ) -> Result<ReceiptDecision> {
+        let r = SignedApplicationReceipt::from_wire(bytes).map_err(|_| Error::Frame)?;
+        let v = r
+            .verify_with_trusted_key(&self.peer.key)
+            .map_err(|_| Error::Authentication)?;
+        tracker.observe(&v).map_err(|_| Error::Frame)
+    }
+    pub fn retry(
+        &mut self,
+        estimate: &ClockEstimate,
+        session: &mut ClipboardSession,
+    ) -> Result<Option<(SignedTextEvent, DeliveryDecision)>> {
+        self.delivery
+            .maintain(estimate, &SystemBootClock)
+            .map_err(|_| Error::Frame)?;
+        let Some(event) = self.delivery.pending_event().map_err(|_| Error::Frame)? else {
+            return Ok(None);
+        };
+        self.receive_live(&event, estimate, session)
+            .map(|d| d.map(|d| (event, d)))
     }
     pub fn tracker(&self, event: &SignedTextEvent) -> Result<DeliveryTracker> {
         let verified = event
@@ -273,7 +419,7 @@ impl Protocol {
         let event = self.sign(text)?;
         let mut context = event.context();
         context.created_boot_ms = now()?
-            .checked_sub(u64::from(TTL) + 500)
+            .checked_sub(u64::from(self.settings.ttl) + 500)
             .ok_or(Error::Setup)?;
         SignedTextEvent::sign(context, text, &self.signing.identity).map_err(|_| Error::Frame)
     }
@@ -284,19 +430,19 @@ impl Protocol {
         session: &mut ClipboardSession,
         fail: bool,
     ) -> Result<Option<DeliveryDecision>> {
-        let verified = event
+        event
             .verify_with_trusted_key(&self.peer.key)
             .map_err(|_| Error::Authentication)?;
-        let decision = self
-            .delivery
-            .receive(&verified, estimate, &SystemBootClock, |text| {
-                if fail {
-                    return Err(());
-                }
-                session.apply_received_text(text).map_err(|_| ())
-            });
+        let decision =
+            self.delivery
+                .receive(event, &self.peer.key, estimate, &SystemBootClock, |text| {
+                    if fail {
+                        return Err(());
+                    }
+                    session.apply_received_text(text).map_err(|_| ())
+                });
         match decision {
-            Err(DeliveryError::ApplyFailed) if fail => Ok(None),
+            Err(BufferError::Delivery(DeliveryError::ApplyFailed)) if fail => Ok(None),
             Ok(d) => Ok(Some(d)),
             Err(_) => Err(Error::Frame),
         }

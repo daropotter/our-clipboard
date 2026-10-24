@@ -15,6 +15,8 @@ Commands:
               Replace the clipboard with synthetic text and verify access
   watch-probe --observe-clipboard <seconds>
               Count native clipboard notifications without reading text (1-60 seconds)
+  pilot --replace-clipboard --ssh <user@host> --remote-program <absolute-path>
+              Interactive SSH pilot; requires explicit clock bounds (see README)
   state-probe      Check temporary durable counters across restart
   freshness-probe  Check suspend-aware clocks and synthetic age decisions
   envelope-probe   Check synthetic signed envelopes and replay filtering
@@ -23,7 +25,7 @@ Commands:
   help        Show this help
   --version   Show version
 
-Clipboard synchronization is not implemented yet.";
+Interactive SSH synchronization is available through the opt-in pilot; see docs/PILOT.md.";
 
 #[cfg(not(feature = "clipboard"))]
 const HELP: &str = "Our Clipboard — headless transport prototype
@@ -59,6 +61,10 @@ fn run(args: &[String]) -> Result<String, &'static str> {
         [] | ["help"] | ["--help"] | ["-h"] => Ok(help()),
         ["--version"] | ["-V"] => Ok(format!("our-clipboard {}", env!("CARGO_PKG_VERSION"))),
         #[cfg(feature = "clipboard")]
+        ["pilot", rest @ ..] => our_clipboard::transport::run_pilot(
+            &rest.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        ),
+        #[cfg(feature = "clipboard")]
         ["clipboard-probe", "--replace-clipboard"] => clipboard_probe(),
         #[cfg(feature = "clipboard")]
         ["watch-probe", "--observe-clipboard", seconds] => watch_probe(seconds),
@@ -79,9 +85,14 @@ fn run(args: &[String]) -> Result<String, &'static str> {
         ["envelope-probe"] => our_clipboard::events::probe().map_err(|error| error.message()),
         ["transport-probe"] => our_clipboard::transport::probe(),
         ["doctor"] => Ok(format!(
-            "OS: {}\nArchitecture: {}\nSynchronization: not implemented",
+            "OS: {}\nArchitecture: {}\nSynchronization: {}",
             std::env::consts::OS,
-            std::env::consts::ARCH
+            std::env::consts::ARCH,
+            if cfg!(feature = "clipboard") {
+                "supervised SSH pilot available"
+            } else {
+                "clipboard integration disabled"
+            }
         )),
         _ => Err("Unknown command or unexpected arguments. Run 'our-clipboard help'."),
     }
@@ -148,7 +159,9 @@ fn clipboard_probe() -> Result<String, &'static str> {
 fn main() -> ExitCode {
     match run(&std::env::args().skip(1).collect::<Vec<_>>()) {
         Ok(output) => {
-            println!("{output}");
+            if !output.is_empty() {
+                println!("{output}");
+            }
             ExitCode::SUCCESS
         }
         Err(message) => {
