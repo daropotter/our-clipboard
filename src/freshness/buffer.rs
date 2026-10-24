@@ -1,6 +1,6 @@
 //! One latest signed envelope in memory; original bytes/TTL survive retry, never restart.
 use super::*;
-use crate::events::SignedTextEvent;
+use crate::events::{SignedTextEvent, TEXT_EVENT_WIRE_OVERHEAD};
 use zeroize::Zeroizing;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferError {
@@ -28,7 +28,10 @@ pub struct BufferedDelivery {
 }
 impl BufferedDelivery {
     pub fn new(delivery: DeliveryReceiver, max_wire_bytes: usize) -> Result<Self, BufferError> {
-        if !(223..=crate::text::MAX_TEXT_BYTES + 222).contains(&max_wire_bytes) {
+        // Text must contain at least one UTF-8 byte in addition to header/signature.
+        if !(TEXT_EVENT_WIRE_OVERHEAD + 1..=crate::text::MAX_TEXT_BYTES + TEXT_EVENT_WIRE_OVERHEAD)
+            .contains(&max_wire_bytes)
+        {
             return Err(BufferError::Capacity);
         }
         Ok(Self {
@@ -117,7 +120,7 @@ impl BufferedDelivery {
         let verified = event
             .verify_with_trusted_key(key)
             .map_err(BufferError::Verification)?;
-        if verified.text().len() + 222 > self.limit {
+        if verified.text().len() + TEXT_EVENT_WIRE_OVERHEAD > self.limit {
             return Err(BufferError::Capacity);
         }
         let decision = if self.idle {
@@ -155,7 +158,9 @@ impl BufferedDelivery {
         }
         decision.map_err(BufferError::Delivery)
     }
-    /// Drop an expired/uncertain/unverifiable candidate without touching the native clipboard.
+    /// Drop a non-fresh candidate without touching the native clipboard or emitting an ACK.
+    /// Freshness outcomes are intentionally silent; clock errors are returned after release.
+    /// Call pending_source() to distinguish a retained candidate from an empty buffer.
     pub fn maintain<C: BootClock>(
         &mut self,
         estimate: &ClockEstimate,

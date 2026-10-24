@@ -517,3 +517,110 @@ fn local_only_winner_reopens_at_equal_clock() {
     assert_eq!(state.clock(), 1);
     assert_eq!(state.winner_source(), Some(key.id()));
 }
+
+#[test]
+fn activated_peer_does_not_authorize_mismatched_local_reservations() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = private_directory();
+    let mut f = Fixture::new();
+    let own = DeviceIdentity::generate().unwrap();
+    f.receiver = own.id();
+    let mut state = DurableAdmission::initialize(dir.path(), f.gate(), 1).unwrap();
+    state.activate_authenticated_source(f.source()).unwrap();
+    let (sequence, lamport) = state.reserve_publication().unwrap();
+    let valid = EventContext {
+        group: [1; 32],
+        membership: [2; 32],
+        session: f.session,
+        sequence,
+        lamport,
+        created_unix_ms: 1,
+        created_boot_ms: 50_000,
+        ttl_ms: 30_000,
+    };
+    for field in 0..5 {
+        let mut context = valid;
+        match field {
+            0 => context.group = [9; 32],
+            1 => context.membership = [9; 32],
+            2 => context.session = SessionId([9; 16]),
+            3 => context.sequence += 1,
+            _ => context.lamport += 1,
+        }
+        let event = SignedTextEvent::sign(context, "synthetic local", &own).unwrap();
+        assert_eq!(
+            state.record_local_event(&event.verify_with_trusted_key(&own.public_key()).unwrap()),
+            Err(StateError::Admission(AdmissionError::Replay(
+                EventError::InvalidContext
+            )))
+        );
+        assert_eq!(state.clock(), lamport);
+        assert_eq!(state.winner_source(), None);
+    }
+    let foreign = SignedTextEvent::sign(valid, "synthetic foreign", &f.source).unwrap();
+    assert!(
+        state
+            .record_local_event(
+                &foreign
+                    .verify_with_trusted_key(&f.source.public_key())
+                    .unwrap()
+            )
+            .is_err()
+    );
+    assert_eq!(state.winner_source(), None);
+}
+#[test]
+fn interleaved_remote_admission_requires_explicit_local_reservation_and_resigning() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = private_directory();
+    let mut f = Fixture::new();
+    let own = DeviceIdentity::generate().unwrap();
+    f.receiver = own.id();
+    let mut state = DurableAdmission::initialize(dir.path(), f.gate(), 1).unwrap();
+    state.activate_authenticated_source(f.source()).unwrap();
+    let (sequence, lamport) = state.reserve_publication().unwrap();
+    let context = EventContext {
+        group: [1; 32],
+        membership: [2; 32],
+        session: f.session,
+        sequence,
+        lamport,
+        created_unix_ms: 1,
+        created_boot_ms: 50_000,
+        ttl_ms: 30_000,
+    };
+    let local = SignedTextEvent::sign(context, "synthetic local", &own).unwrap();
+    let remote = f.event(1, 10, 60_000);
+    state
+        .admit(
+            &remote
+                .verify_with_trusted_key(&f.source.public_key())
+                .unwrap(),
+            &f.estimate(),
+            50_001,
+        )
+        .unwrap();
+    assert!(
+        state
+            .record_local_event(&local.verify_with_trusted_key(&own.public_key()).unwrap())
+            .is_err()
+    );
+    assert_eq!(state.clock(), 11);
+    assert_eq!(state.winner_source(), Some(f.source.id()));
+    let (sequence, lamport) = state.reserve_publication().unwrap();
+    let local = SignedTextEvent::sign(
+        EventContext {
+            sequence,
+            lamport,
+            ..context
+        },
+        "synthetic local",
+        &own,
+    )
+    .unwrap();
+    state
+        .record_local_event(&local.verify_with_trusted_key(&own.public_key()).unwrap())
+        .unwrap();
+    assert_eq!(state.clock(), 12);
+    assert_eq!(state.winner_source(), Some(own.id()));
+}
