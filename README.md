@@ -199,8 +199,9 @@ clipboard independently before the corresponding applied acknowledgement is sent
 or accepted. Own-write notifications must not cause an echo, and preexisting
 synthetic baseline contents must not be emitted.
 
-The fixture exchanges only public test certificates through anonymous parent/child
-pipes; private keys stay in their generating processes. It requires explicit
+The fixture exchanges public TLS certificates, event-signing keys and session IDs
+through trusted anonymous parent/child pipes; private keys stay in their generating
+processes. Those setup pipes provide the test membership/key mapping. It requires explicit
 `--replace-clipboard` consent and two disposable X11 displays. It is an example/test
 helper, not an installed client command, a pairing protocol, or a persistent daemon.
 
@@ -215,10 +216,27 @@ docker run --rm --network none \
   our-clipboard-tests bash /run-sync.sh /examples/synthetic-clipboard-sync
 ```
 
-This proves the clipboard/observer/TLS/application path for controlled X11
-sessions. It does not provide production session stabilization, pairing,
-membership, TTL/freshness, reconnect behavior, multi-hop delivery or cross-platform
-end-to-end certification. Those remain explicit next increments.
+Signed canonical events now pass through `DeliveryReceiver` and temporary durable
+metadata before `ClipboardSession` applies them. Both directions obtain signed
+boot-clock samples over TLS and wait through a two-second receiver quiet period.
+The fixture explicitly assumes 1000 ppm relative drift, one-millisecond granularity,
+a 100 ms maximum RTT and 20-second sample lifetime on its controlled test hosts.
+These bounds are test assumptions, not production guarantees. An extra 100 ms
+send delay keeps sample events away from uncertainty boundaries; TTL is not reset.
+
+Typed bounded frames distinguish clock requests/replies, signed events and
+hash-bound application receipts. Tampered signatures and pre-session/expired
+creation times preserve the receiver's baseline clipboard. An injected pre-write
+failure requests retransmission of the identical envelope, then a successful
+write produces its receipt; a further duplicate is acknowledged without another
+write. Independent readers and own-write markers continue checking application
+and absence of echo in both directions.
+
+This proves the signed admission/clipboard/observer/TLS/application path for
+controlled X11 sessions. Production pairing/membership, deployment clock bounds,
+persistent runtime setup, reconnect behavior, multi-hop delivery and cross-platform
+end-to-end certification remain pending. The separate headless `transport-probe`
+continues using its earlier experimental text framing.
 
 ## Persistent client signing identity
 
@@ -286,8 +304,8 @@ This is a protocol foundation: signature/replay checks do not establish freshnes
 membership rights, handshake freshness or application acknowledgements. The base replay guard is in memory; the durable admission wrapper below
 restores watermarks and requires fresh receiver sessions after restart. Signed Unix time
 is metadata, not sufficient evidence of age. The signed boot-time timestamp is
-used for the suspend-aware freshness checks below. The existing
-TLS/clipboard fixtures retain their separate experimental framing for now.
+used for the suspend-aware freshness checks below and the signed two-clipboard
+fixture above. The headless TLS probe retains its experimental text framing.
 
 ## Freshness and logical admission prototype
 
@@ -325,9 +343,9 @@ no clipboard history. Logical selection is not a clipboard-write acknowledgement
 the actuator must separately track successful application and retries.
 
 The base admission object is in memory; the durable wrapper below persists its
-watermarks. Pairing/membership, clock negotiation and the actual transport/clipboard
-admission pipeline remain to be integrated. The current TLS fixtures retain their
-experimental framing and do not exercise this new admission pipeline end to end.
+watermarks. The two-clipboard fixture exercises clock negotiation and signed
+admission through actual TLS and native writes. Production pairing/membership,
+clock policy and persistent client runtime remain to be integrated.
 
 ## Durable admission metadata
 
