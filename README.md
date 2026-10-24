@@ -468,6 +468,45 @@ and conflicting reuse are rejected; selection clears pending remote retries.
 A reservation by itself does not claim a clipboard copy. Native observation still
 must exclude startup and Idle-era contents.
 
+## Outbound-only WSS relay transport
+
+The `transport::outbound` library lets **both endpoints dial out** to
+`wss://HOST/our-clipboard/v1` (port 443 by default). No client opens a listening
+socket. TLS client/server *protocol roles* run inside that outbound channel;
+they are independent of TCP listening roles. A second mutually authenticated
+TLS 1.3 session pins public peer certificate offers and encrypts application
+bytes end to end. The relay sees routing metadata and encrypted records, not
+clipboard text or device private keys.
+
+A separate reachable server can run a headless relay:
+
+```sh
+cargo build --locked --no-default-features
+./target/debug/our-clipboard relay --listen 0.0.0.0:8443 \
+  --tls-cert /secure/fullchain.pem --tls-key /secure/privkey.pem
+```
+
+Run this only on the relay server, never on an outbound-only workstation.
+`OUR_CLIPBOARD_RELAY_TOKEN` must be supplied through the environment on server
+and clients: 32–256 ASCII letters/digits/underscores/hyphens. It is a transport
+access credential, never a group membership key or a URL/CLI argument. Server
+keys require private Unix permissions; normal WSS hostname/CA checks remain
+active. The client may explicitly add a private relay CA, separately from its
+pinned peer offer. No public relay is selected or contacted automatically.
+
+The experimental relay caps active sockets (32), waiting rooms (16), binary
+messages (64 KiB), buffers, setup/join waiting and session lifetime. Duplicate
+slots cannot displace a waiting client. Routing room IDs are public metadata,
+not peer authentication. Peer offers must be verified through an independent
+trusted channel; the relay cannot supply its own key as a trusted peer.
+
+This is a transport foundation, not yet wired into the clipboard pilot. Operator
+provisioning, per-user quotas, credential rotation, hardened public hosting,
+HTTP CONNECT proxies and production group enrollment remain future work. Tests
+exercise real WSS plus inner mutual TLS, wrong peer/relay/access credentials,
+duplicate slots, bounded full-duplex streaming and absence of sample plaintext
+in the relay's captured inner records. No listener is required on either client.
+
 ## License
 
 [MIT](LICENSE), copyright 2026 Daro Potter.

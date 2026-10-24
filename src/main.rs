@@ -20,6 +20,8 @@ Commands:
   state-probe      Check temporary durable counters across restart
   freshness-probe  Check suspend-aware clocks and synthetic age decisions
   envelope-probe   Check synthetic signed envelopes and replay filtering
+  relay --listen IP:PORT --tls-cert FILE --tls-key FILE
+              Headless WSS relay; requires OUR_CLIPBOARD_RELAY_TOKEN
   transport-probe
               Check synthetic mutual TLS over direct and relayed loopback connections
   help        Show this help
@@ -37,6 +39,8 @@ Commands:
   state-probe      Check temporary durable counters across restart
   freshness-probe  Check suspend-aware clocks and synthetic age decisions
   envelope-probe   Check synthetic signed envelopes and replay filtering
+  relay --listen IP:PORT --tls-cert FILE --tls-key FILE
+              Headless WSS relay; requires OUR_CLIPBOARD_RELAY_TOKEN
   transport-probe  Check synthetic mutual TLS over direct and relayed loopback connections
   help             Show this help
   --version        Show version
@@ -83,6 +87,14 @@ fn run(args: &[String]) -> Result<String, &'static str> {
         }
         ["freshness-probe"] => our_clipboard::freshness::probe().map_err(|error| error.message()),
         ["envelope-probe"] => our_clipboard::events::probe().map_err(|error| error.message()),
+        ["relay","--help"]=>Ok("Usage: our-clipboard relay --listen IP:PORT --tls-cert CERT.pem --tls-key KEY.pem\nRequires OUR_CLIPBOARD_RELAY_TOKEN; run on a separate reachable server, never on an outbound-only endpoint.".into()),
+        ["relay","--listen",address,"--tls-cert",cert,"--tls-key",key]=>{
+            use our_clipboard::transport::outbound::{self,AccessToken};
+            let listen=address.parse().map_err(|_|"Invalid relay listen address.")?;
+            let token=AccessToken::from_env().map_err(|e|e.message())?;
+            outbound::serve(listen,std::path::Path::new(cert),std::path::Path::new(key),token).map_err(|e|e.message())?;
+            Ok(String::new())
+        }
         ["transport-probe"] => our_clipboard::transport::probe(),
         ["doctor"] => Ok(format!(
             "OS: {}\nArchitecture: {}\nSynchronization: {}",
