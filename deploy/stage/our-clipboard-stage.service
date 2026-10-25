@@ -1,0 +1,16 @@
+[Unit]
+Description=Our Clipboard stage WSS relay
+Requires=docker.service stage-preview-proxy.service
+After=docker.service stage-preview-proxy.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/our-clipboard-stage
+ExecStart=/usr/bin/docker compose --env-file /etc/our-clipboard/image.env -f compose.yaml up -d --no-build --pull never
+ExecStop=/usr/bin/docker compose --env-file /etc/our-clipboard/image.env -f compose.yaml stop
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

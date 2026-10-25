@@ -1,0 +1,16 @@
+clipboard.stage.daropotter.com {
+    tls {
+        protocols tls1.3
+    }
+    @relay path /our-clipboard/v1
+    handle @relay {
+        reverse_proxy https://our-clipboard-stage-relay:8443 {
+            transport http {
+                tls_server_name our-clipboard-stage-relay
+                tls_trust_pool file /etc/caddy/previews/our-clipboard-ca.pem
+                versions 1.1
+            }
+        }
+    }
+    respond 404
+}
