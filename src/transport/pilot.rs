@@ -1,4 +1,4 @@
-//! Explicit two-machine pilot over pretrusted SSH. No discovery, persistent pairing or OS Idle hooks.
+//! Supervised two-machine pilot over pinned WSS or pretrusted SSH. No OS Idle hooks.
 use super::outbound::{self, AccessToken, PublicOffer, RelayIdentity, Room, Side};
 use super::peer_protocol::{self as wire, Kind, Protocol, PublicPeer, Settings, SigningPeer};
 use super::*;
@@ -550,18 +550,38 @@ fn wait_offer(path: &Path) -> std::result::Result<PublicOffer, &'static str> {
         }
     }
 }
+// sha256: plus 32 digest bytes encoded as hex, CRLF, and one overflow byte.
+const MAX_FINGERPRINT_INPUT: u64 = ("sha256:".len() + 32 * 2 + 2 + 1) as u64;
 fn confirm_peer(input: &mut impl BufRead, expected: &str) -> std::result::Result<(), &'static str> {
     let mut text = String::new();
     input
-        .take(80)
+        .take(MAX_FINGERPRINT_INPUT)
         .read_line(&mut text)
         .map_err(|_| "Could not read fingerprint confirmation.")?;
-    if text.trim() != expected {
+    if text.len() as u64 >= MAX_FINGERPRINT_INPUT || text.trim() != expected {
         return Err(
             "Peer fingerprint confirmation failed; no network pairing or clipboard access occurred.",
         );
     }
     Ok(())
+}
+// Error carries only enum variants, never backend messages, text or keys.
+fn relay_session_error(error: Error) -> &'static str {
+    match error {
+        Error::Setup => {
+            "Relay pilot stopped (Setup): check clipboard backend, local state and clock assumptions."
+        }
+        Error::Io => {
+            "Relay pilot stopped (Io): transport or clipboard operation failed; check connectivity and desktop access."
+        }
+        Error::Authentication => {
+            "Relay pilot stopped (Authentication): peer identity or signed session verification failed."
+        }
+        Error::Frame => {
+            "Relay pilot stopped (Frame): invalid protocol frame, receipt or clock calibration."
+        }
+        Error::Worker => "Relay pilot stopped (Worker): a protocol worker failed.",
+    }
 }
 fn relay_pilot(o: &Options) -> std::result::Result<(), &'static str> {
     let token = AccessToken::from_env().map_err(|e| e.message())?;
@@ -598,7 +618,7 @@ fn relay_pilot(o: &Options) -> std::result::Result<(), &'static str> {
         },
     )
     .map_err(|e| e.message())?;
-    session(reader,writer,o).map_err(|_|"Relay pilot stopped: transport, clock or clipboard operation failed; content and private keys omitted.")
+    session(reader, writer, o).map_err(relay_session_error)
 }
 // clipboard-rs emits unstructured stdout diagnostics on X11 ownership changes.
 // A pilot exclusively owns this process: preserve its binary output pipe, then
@@ -733,8 +753,32 @@ mod relay_tests {
             )
             .is_ok()
         );
-        for wrong in ["yes".to_string(), "0".repeat(1000), String::new()] {
+        assert!(
+            confirm_peer(
+                &mut std::io::Cursor::new(format!("{expected}\r\n")),
+                &expected
+            )
+            .is_ok()
+        );
+        for wrong in [
+            "yes".to_string(),
+            "0".repeat(1000),
+            String::new(),
+            format!("{expected}{}junk", " ".repeat(100)),
+        ] {
             assert!(confirm_peer(&mut std::io::Cursor::new(wrong), &expected).is_err());
+        }
+    }
+    #[test]
+    fn relay_errors_preserve_the_safe_protocol_variant() {
+        for (error, name) in [
+            (Error::Setup, "Setup"),
+            (Error::Io, "Io"),
+            (Error::Authentication, "Authentication"),
+            (Error::Frame, "Frame"),
+            (Error::Worker, "Worker"),
+        ] {
+            assert!(relay_session_error(error).contains(&format!("({name})")));
         }
     }
     #[test]

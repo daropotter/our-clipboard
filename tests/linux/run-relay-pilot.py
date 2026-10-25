@@ -121,6 +121,7 @@ with tempfile.TemporaryDirectory() as directory:
         bad.stdin.write(b"yes\n")
         bad.stdin.close()
         assert bad.wait(timeout=5) == 2, "Unverified fingerprint was accepted"
+        assert "Peer fingerprint confirmation failed" in status(root / "bad.log"), "Expected trust rejection diagnostic"
         assert "connect(" not in (root / "bad.trace").read_text(), "Connected before fingerprint confirmation"
         assert "listen(" not in (root / "bad.trace").read_text(), "Rejected endpoint tried to listen"
         logs = status(root / "a.log") + status(root / "b.log")
