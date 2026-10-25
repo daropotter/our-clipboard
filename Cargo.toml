@@ -53,3 +53,6 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["N
 name = "synthetic-clipboard-sync"
 path = "examples/synthetic-clipboard-sync.rs"
 required-features = ["clipboard"]
+
+[dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
