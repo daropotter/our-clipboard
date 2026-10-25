@@ -262,3 +262,36 @@ fn duplicate_slot_cannot_replace_the_waiting_client() {
     original.send(Message::Binary(vec![7; 32].into())).unwrap();
     assert!(matches!(other.read(),Ok(Message::Binary(b))if b.as_ref()==[7;32]));
 }
+
+#[cfg(unix)]
+#[test]
+fn serve_rejects_exposed_key_before_binding() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap();
+    let cert = rcgen::CertificateParams::new(vec!["localhost".into()])
+        .unwrap()
+        .self_signed(&key)
+        .unwrap();
+    let cert_path = dir.path().join("cert.pem");
+    let key_path = dir.path().join("key.pem");
+    std::fs::write(&cert_path, cert.pem()).unwrap();
+    std::fs::write(&key_path, key.serialize_pem()).unwrap();
+    // An occupied address lets serve validate real PEM files without leaving
+    // a detached server running. Transport proves private-key validation passed;
+    // Configuration proves the exposed key was rejected before binding.
+    let occupied = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = occupied.local_addr().unwrap();
+    for (mode, expected) in [
+        (0o600, RelayError::Transport),
+        (0o640, RelayError::Configuration),
+        (0o644, RelayError::Configuration),
+        (0o606, RelayError::Configuration),
+    ] {
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(mode)).unwrap();
+        assert_eq!(
+            serve(address, &cert_path, &key_path, token()),
+            Err(expected)
+        );
+    }
+}
