@@ -243,6 +243,7 @@ fn duplicate_slot_cannot_replace_the_waiting_client() {
             Some(ws_config()),
             Some(tungstenite::Connector::Rustls(h.outer.clone())),
         )
+        .map_err(|_| "Test WSS handshake failed; headers omitted")
         .unwrap();
         let mut join = b"OCRJ\x01".to_vec();
         join.extend([4; 32]);
