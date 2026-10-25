@@ -207,3 +207,29 @@ fn pilot_help_needs_no_graphical_session_or_ssh() {
             .contains("--max-drift-ppm")
     );
 }
+
+#[test]
+fn relay_help_and_missing_access_credentials_do_not_initialize_clipboard() {
+    let help = cli(&["relay", "--help"]);
+    assert!(help.status.success());
+    assert!(
+        String::from_utf8(help.stdout)
+            .unwrap()
+            .contains("--tls-cert")
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
+        .args([
+            "relay",
+            "--listen",
+            "127.0.0.1:0",
+            "--tls-cert",
+            "/nonexistent-cert",
+            "--tls-key",
+            "/nonexistent-key",
+        ])
+        .env_remove("OUR_CLIPBOARD_RELAY_TOKEN")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+}
