@@ -295,3 +295,34 @@ fn serve_rejects_exposed_key_before_binding() {
         );
     }
 }
+
+#[test]
+fn preflight_checks_outer_trust_without_reserving_a_room() {
+    let relay = Harness::new();
+    check_relay(&relay.url, &relay.token, relay.outer.clone()).unwrap();
+    let wrong_token = token();
+    assert_eq!(
+        check_relay(&relay.url, &wrong_token, relay.outer.clone()),
+        Err(RelayError::Authentication)
+    );
+    let wrong_ca = Identity::new().unwrap();
+    assert_eq!(
+        check_relay(
+            &relay.url,
+            &relay.token,
+            outer_client_config(roots(&wrong_ca.cert).unwrap()).unwrap()
+        ),
+        Err(RelayError::Authentication)
+    );
+    assert_eq!(
+        check_relay(
+            "ws://localhost/our-clipboard/v1",
+            &relay.token,
+            relay.outer.clone()
+        ),
+        Err(RelayError::Configuration)
+    );
+    assert!(relay.capture.lock().unwrap().is_empty());
+    let (left, right) = relay.pair(false);
+    assert!(left.is_ok() && right.is_ok());
+}

@@ -88,6 +88,20 @@ sudo docker logs --tail 20 our-clipboard-relay
 ```
 
 A running process alone does not prove DNS, ingress, WSS or peer connectivity.
+From either workstation (with the transport credential in its environment), run:
+
+```sh
+./target/debug/our-clipboard relay-check --relay wss://YOUR_RELAY_HOST/our-clipboard/v1
+```
+
+This command needs no graphical session and works in a headless build. It checks
+outgoing TCP, validated TLS/hostname, and the credential-authenticated WSS upgrade,
+then closes without joining a room, generating offers or accessing a clipboard.
+For a private CA add `--relay-ca /path/to/public-ca.pem`. It cannot prove peer
+identity, available room capacity or clipboard delivery. No token/URL is echoed.
+DNS resolution uses the OS resolver; socket setup has bounded deadlines, but a
+stalled OS resolver is outside those deadlines.
+
 Complete the two-client exchange in [OUTBOUND-PILOT.md](OUTBOUND-PILOT.md) before
 calling deployment verified. No HTTP health endpoint or management listener is
 provided. Do not use `docker inspect` output as a diagnostic attachment: it includes
