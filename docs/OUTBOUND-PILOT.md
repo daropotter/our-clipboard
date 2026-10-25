@@ -10,6 +10,9 @@ this repository does not provision hosting or silently choose a public provider.
 
 ## Relay operator
 
+For an unprivileged container on a separate Linux server, use
+[the relay hosting recipe](RELAY-HOSTING.md). No hosting is deployed automatically.
+
 Run the relay on a separate server that is allowed to listen, never on either
 restricted workstation. Build the same revision without graphical dependencies:
 

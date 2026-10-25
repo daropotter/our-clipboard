@@ -14,7 +14,7 @@ and Linux (X11 and native Wayland); these are goals, not verified support claims
 
 Build this revision on both machines and follow [the outbound pilot guide](docs/OUTBOUND-PILOT.md).
 Both computers connect out to WSS/443; neither needs SSH or a listening socket.
-A separate reachable relay, transport access credential and independent peer
+A [separately hosted relay](docs/RELAY-HOSTING.md), transport access credential and independent peer
 fingerprint confirmations are required. Signed events, original TTL and receiver
 ACKs remain active. Wait for both READY statuses before copying.
 The optional [SSH pilot](docs/PILOT.md) is available only where policy allows it.

@@ -6,3 +6,15 @@
 !tests/linux/Dockerfile.gnome
 !tests/identity/
 !tests/identity/Dockerfile
+!Cargo.toml
+!Cargo.lock
+!src/
+!src/**
+!deploy/
+!deploy/relay.Dockerfile
+!deploy/relay.Dockerfile.dockerignore
+**/*.pem
+**/*.key
+**/.env
+**/.env.*
+**/ZALOZENIA.md

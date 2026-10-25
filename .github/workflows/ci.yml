@@ -139,6 +139,18 @@ jobs:
             -v "$PWD/target/debug/examples/synthetic-clipboard-sync:/helper:ro" \
             -v "$PWD/tests/linux/run-relay-pilot.py:/run-relay-pilot.py:ro" \
             our-clipboard-relay-tests python3 /run-relay-pilot.py /pilot /helper
+  relay-container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked --bin our-clipboard --example synthetic-clipboard-sync
+      - run: docker build -t our-clipboard-tests -f tests/linux/Dockerfile .
+      - run: docker build -t our-clipboard-relay-tests -f tests/linux/Dockerfile.relay .
+      - run: docker build -t our-clipboard-relay -f deploy/relay.Dockerfile .
+      - name: Packaged non-root relay and native outbound clients
+        run: python3 tests/linux/run-relay-container.py
   native-identity:
     strategy:
       fail-fast: false

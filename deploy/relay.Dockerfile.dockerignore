@@ -1,0 +1,10 @@
+**
+!Cargo.toml
+!Cargo.lock
+!src/
+!src/**
+**/*.pem
+**/*.key
+**/.env
+**/.env.*
+**/ZALOZENIA.md

@@ -12,6 +12,8 @@ import tempfile
 import time
 
 binary, helper = sys.argv[1:3]
+external = os.environ.get("OUR_CLIPBOARD_EXTERNAL_RELAY") == "1"
+relay_port = 8443 if external else 443
 children = []
 handles = []
 
@@ -57,22 +59,28 @@ with tempfile.TemporaryDirectory() as directory:
             spawn(["Xvfb", display, "-screen", "0", "1280x720x24", "-nolisten", "tcp"])
             wait_for(lambda: inspect(display, "check-display"))
         cert, key = root / "relay.pem", root / "relay.key"
-        subprocess.run(["openssl", "req", "-x509", "-newkey", "ed25519", "-nodes", "-days", "1",
-                        "-keyout", str(key), "-out", str(cert), "-subj", "/CN=localhost",
-                        "-addext", "subjectAltName=DNS:localhost", "-addext", "basicConstraints=critical,CA:FALSE",
-                        "-addext", "keyUsage=critical,digitalSignature", "-addext", "extendedKeyUsage=serverAuth"], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        key.chmod(0o600)
-        env = dict(os.environ, OUR_CLIPBOARD_RELAY_TOKEN=secrets.token_hex(32), XDG_SESSION_TYPE="x11")
+        if external:
+            cert = Path("/tls/fullchain.pem")
+        else:
+            subprocess.run(["openssl", "req", "-x509", "-newkey", "ed25519", "-nodes", "-days", "1",
+                            "-keyout", str(key), "-out", str(cert), "-subj", "/CN=localhost",
+                            "-addext", "subjectAltName=DNS:localhost", "-addext", "basicConstraints=critical,CA:FALSE",
+                            "-addext", "keyUsage=critical,digitalSignature", "-addext", "extendedKeyUsage=serverAuth"], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            key.chmod(0o600)
+        token = os.environ["OUR_CLIPBOARD_RELAY_TOKEN"] if external else secrets.token_hex(32)
+        env = dict(os.environ, OUR_CLIPBOARD_RELAY_TOKEN=token, XDG_SESSION_TYPE="x11")
         env.pop("WAYLAND_DISPLAY", None)
         env.pop("WAYLAND_SOCKET", None)
-        server = spawn([binary, "relay", "--listen", "127.0.0.1:443", "--tls-cert", str(cert),
-                        "--tls-key", str(key)], env=env, log=root / "relay.log")
+        server = None
+        if not external:
+            server = spawn([binary, "relay", "--listen", "127.0.0.1:443", "--tls-cert", str(cert),
+                            "--tls-key", str(key)], env=env, log=root / "relay.log")
         def listening():
-            if server.poll() is not None:
+            if server is not None and server.poll() is not None:
                 raise AssertionError("Relay exited")
             try:
-                with socket.create_connection(("127.0.0.1", 443), timeout=0.1):
+                with socket.create_connection(("127.0.0.1", relay_port), timeout=0.1):
                     return True
             except OSError:
                 return False
@@ -84,7 +92,7 @@ with tempfile.TemporaryDirectory() as directory:
         clients = {}
         for side, display, peer in (("a", ":91", "b"), ("b", ":92", "a")):
             args = ["strace", "-f", "-qq", "-e", "trace=listen", "-o", str(root / f"{side}.trace"),
-                    binary, "pilot", "--replace-clipboard", "--relay", "wss://localhost/our-clipboard/v1",
+                    binary, "pilot", "--replace-clipboard", "--relay", f"wss://localhost:{relay_port}/our-clipboard/v1",
                     "--relay-ca", str(cert), "--room", room, "--side", side,
                     "--offer", str(root / f"{side}.offer"), "--peer-offer", str(root / f"{peer}-for-{side}.offer"),
                     "--seconds", "12", "--ttl-ms", "1000", "--max-drift-ppm", "1000",
@@ -113,7 +121,7 @@ with tempfile.TemporaryDirectory() as directory:
             assert process.wait(timeout=20) == 0, "Pilot exited unsuccessfully"
             assert "listen(" not in (root / f"{side}.trace").read_text(), "Endpoint tried to listen"
         bad = spawn(["strace", "-f", "-qq", "-e", "trace=listen,connect", "-o", str(root / "bad.trace"),
-                     binary, "pilot", "--replace-clipboard", "--relay", "wss://localhost/our-clipboard/v1",
+                     binary, "pilot", "--replace-clipboard", "--relay", f"wss://localhost:{relay_port}/our-clipboard/v1",
                      "--relay-ca", str(cert), "--room", room, "--side", "a", "--offer", str(root / "bad.offer"),
                      "--peer-offer", str(root / "b.offer"), "--seconds", "12", "--ttl-ms", "1000",
                      "--max-drift-ppm", "1000", "--clock-granularity-ms", "1"],
