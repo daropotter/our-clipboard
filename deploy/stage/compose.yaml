@@ -1,0 +1,25 @@
+name: our-clipboard-stage
+services:
+  relay:
+    image: ${RELAY_IMAGE:?set RELAY_IMAGE to the tested immutable image ID}
+    container_name: our-clipboard-stage-relay
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 1
+    env_file: /etc/our-clipboard/relay.env
+    volumes:
+      - /etc/our-clipboard/tls:/tls:ro
+    networks: [ingress]
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: '3'
+networks:
+  ingress:
+    external: true
+    name: stage-preview-proxy_default

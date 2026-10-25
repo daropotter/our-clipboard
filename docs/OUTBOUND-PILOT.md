@@ -10,6 +10,10 @@ this repository does not provision hosting or silently choose a public provider.
 
 ## Relay operator
 
+The authorized [stage deployment](../deploy/stage/README.md) is available at
+`wss://clipboard.stage.daropotter.com/our-clipboard/v1`; obtain its transport
+credential through an authorized secret channel.
+
 For an unprivileged container on a separate Linux server, use
 [the relay hosting recipe](RELAY-HOSTING.md). No hosting is deployed automatically.
 
