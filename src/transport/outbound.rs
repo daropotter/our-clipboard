@@ -397,23 +397,12 @@ fn outer_client_config(roots: RootCertStore) -> R<Arc<ClientConfig>> {
             .with_no_client_auth(),
     ))
 }
-pub struct RelayOptions<'a> {
-    pub url: &'a str,
-    pub room: Room,
-    pub side: Side,
-    pub token: &'a AccessToken,
-    pub peer: &'a PublicOffer,
-    pub outer: Arc<ClientConfig>,
-}
-pub fn connect(identity: &RelayIdentity, options: RelayOptions<'_>) -> R<RelayParts> {
-    let RelayOptions {
-        url,
-        room,
-        side,
-        token,
-        peer,
-        outer,
-    } = options;
+// Shared path ensures preflight and real sessions enforce identical WSS trust rules.
+fn open_wss(
+    url: &str,
+    token: &AccessToken,
+    outer: Arc<ClientConfig>,
+) -> R<(ByteStream, RelayLifetime)> {
     use std::net::ToSocketAddrs;
     use tungstenite::client::IntoClientRequest;
     let mut request = url
@@ -460,11 +449,42 @@ pub fn connect(identity: &RelayIdentity, options: RelayOptions<'_>) -> R<RelayPa
         Some(tungstenite::Connector::Rustls(outer)),
     )
     .map_err(|_| RelayError::Authentication)?;
-    let mut stream = ByteStream {
-        ws,
-        bytes: Vec::new(),
-        offset: 0,
-    };
+    Ok((
+        ByteStream {
+            ws,
+            bytes: Vec::new(),
+            offset: 0,
+        },
+        guard,
+    ))
+}
+/// Verify outer WSS/TLS and transport authentication only; no room or peer enrollment.
+/// The connection is closed immediately and never carries clipboard/application data.
+pub fn check_relay(url: &str, token: &AccessToken, outer: Arc<ClientConfig>) -> R<()> {
+    let (mut stream, _lifetime) = open_wss(url, token, outer)?;
+    // A successful upgrade has already verified TLS and the access credential.
+    // Do not wait for a peer or a close reply; the lifetime guard cancels the socket.
+    let _ = stream.ws.close(None);
+    Ok(())
+}
+pub struct RelayOptions<'a> {
+    pub url: &'a str,
+    pub room: Room,
+    pub side: Side,
+    pub token: &'a AccessToken,
+    pub peer: &'a PublicOffer,
+    pub outer: Arc<ClientConfig>,
+}
+pub fn connect(identity: &RelayIdentity, options: RelayOptions<'_>) -> R<RelayParts> {
+    let RelayOptions {
+        url,
+        room,
+        side,
+        token,
+        peer,
+        outer,
+    } = options;
+    let (mut stream, guard) = open_wss(url, token, outer)?;
     let mut join = b"OCRJ\x01".to_vec();
     join.extend(room.0);
     join.push(side.byte());

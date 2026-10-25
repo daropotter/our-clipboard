@@ -233,3 +233,26 @@ fn relay_help_and_missing_access_credentials_do_not_initialize_clipboard() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
 }
+
+#[test]
+fn relay_preflight_requires_credentials_and_works_without_clipboard() {
+    let help = cli(&["relay-check", "--help"]);
+    assert!(help.status.success());
+    assert!(
+        String::from_utf8(help.stdout)
+            .unwrap()
+            .contains("no clipboard")
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
+        .args(["relay-check", "--relay", "wss://localhost/our-clipboard/v1"])
+        .env_remove("OUR_CLIPBOARD_RELAY_TOKEN")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("OUR_CLIPBOARD_RELAY_TOKEN")
+    );
+}

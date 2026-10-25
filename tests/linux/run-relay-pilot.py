@@ -85,6 +85,18 @@ with tempfile.TemporaryDirectory() as directory:
             except OSError:
                 return False
         wait_for(listening)
+        check_env = dict(env)
+        for variable in ("DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "XDG_SESSION_TYPE"):
+            check_env.pop(variable, None)
+        check_args = ["strace", "-f", "-qq", "-e", "trace=listen", "-o", str(root / "check.trace"),
+                      binary, "relay-check", "--relay", f"wss://localhost:{relay_port}/our-clipboard/v1",
+                      "--relay-ca", str(cert)]
+        check = subprocess.run(check_args, env=check_env, capture_output=True, timeout=20)
+        assert check.returncode == 0 and b"check passed" in check.stdout, "WSS preflight failed"
+        assert "listen(" not in (root / "check.trace").read_text(), "Preflight tried to listen"
+        rejected = subprocess.run(check_args, env=dict(check_env, OUR_CLIPBOARD_RELAY_TOKEN=secrets.token_hex(32)),
+                                  capture_output=True, timeout=20)
+        assert rejected.returncode != 0 and not rejected.stdout, "Preflight accepted wrong transport credential"
         seed(":91", "seed-request")
         seed(":92", "seed-response")
         wait_for(lambda: inspect(":91", "inspect-request") and inspect(":92", "inspect-response"))

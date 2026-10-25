@@ -22,6 +22,8 @@ Commands:
   state-probe      Check temporary durable counters across restart
   freshness-probe  Check suspend-aware clocks and synthetic age decisions
   envelope-probe   Check synthetic signed envelopes and replay filtering
+  relay-check --relay URL [--relay-ca FILE]
+              Check outbound WSS/TLS/access only; no clipboard or peer pairing
   relay --listen IP:PORT --tls-cert FILE --tls-key FILE
               Headless WSS relay; requires OUR_CLIPBOARD_RELAY_TOKEN
   transport-probe
@@ -41,6 +43,8 @@ Commands:
   state-probe      Check temporary durable counters across restart
   freshness-probe  Check suspend-aware clocks and synthetic age decisions
   envelope-probe   Check synthetic signed envelopes and replay filtering
+  relay-check --relay URL [--relay-ca FILE]
+              Check outbound WSS/TLS/access only; no clipboard or peer pairing
   relay --listen IP:PORT --tls-cert FILE --tls-key FILE
               Headless WSS relay; requires OUR_CLIPBOARD_RELAY_TOKEN
   transport-probe  Check synthetic mutual TLS over direct and relayed loopback connections
@@ -55,6 +59,17 @@ fn help() -> String {
         text.push_str("\n\nIdentity (system credential store):\n  identity init [--profile name]\n  identity show [--profile name]");
     }
     text
+}
+
+fn relay_check(url: &str, ca: Option<&str>) -> Result<String, &'static str> {
+    use our_clipboard::transport::outbound::{self, AccessToken};
+    let token = AccessToken::from_env().map_err(|e| e.message())?;
+    let roots = outbound::relay_roots(ca.map(std::path::Path::new)).map_err(|e| e.message())?;
+    outbound::check_relay(url, &token, roots).map_err(|e| e.message())?;
+    Ok(
+        "Relay WSS/TLS/access check passed. Peer trust and clipboard delivery were not tested."
+            .into(),
+    )
 }
 
 fn run(args: &[String]) -> Result<String, &'static str> {
@@ -89,6 +104,9 @@ fn run(args: &[String]) -> Result<String, &'static str> {
         }
         ["freshness-probe"] => our_clipboard::freshness::probe().map_err(|error| error.message()),
         ["envelope-probe"] => our_clipboard::events::probe().map_err(|error| error.message()),
+        ["relay-check", "--help"] => Ok("Usage: our-clipboard relay-check --relay wss://HOST/our-clipboard/v1 [--relay-ca CA.pem]\nRequires OUR_CLIPBOARD_RELAY_TOKEN. Checks outer WSS, hostname/certificate and transport access only; no clipboard, peer authentication or room reservation.".into()),
+        ["relay-check", "--relay", url] => relay_check(url, None),
+        ["relay-check", "--relay", url, "--relay-ca", ca] => relay_check(url, Some(ca)),
         ["relay","--help"]=>Ok("Usage: our-clipboard relay --listen IP:PORT --tls-cert CERT.pem --tls-key KEY.pem\nRequires OUR_CLIPBOARD_RELAY_TOKEN; run on a separate reachable server, never on an outbound-only endpoint.".into()),
         ["relay","--listen",address,"--tls-cert",cert,"--tls-key",key]=>{
             use our_clipboard::transport::outbound::{self,AccessToken};

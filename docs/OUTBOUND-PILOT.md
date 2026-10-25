@@ -47,6 +47,15 @@ cargo build --locked
 ./target/debug/our-clipboard doctor --clipboard
 ```
 
+First check each computer can reach the chosen relay, without clipboard access:
+
+```sh
+./target/debug/our-clipboard relay-check --relay wss://RELAY_HOST/our-clipboard/v1
+```
+
+Set `OUR_CLIPBOARD_RELAY_TOKEN` before the check; add `--relay-ca` for a private
+CA. Success verifies only outer WSS/TLS/access, not peer trust or text delivery.
+
 Use logged-in, unlocked desktop sessions and grant native macOS clipboard access
 if requested. Set the relay access credential through the environment on each.
 Use a new working directory or fresh offer filenames for every run.
