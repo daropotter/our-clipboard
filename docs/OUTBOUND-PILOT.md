@@ -113,6 +113,67 @@ should join the same relay room within two minutes. Old offers cannot be reused
 with a restarted process: start fresh processes and exchange new offers.
 This is manual test enrollment, not the final pairing-code protocol.
 
+## Explicit local Idle control
+
+Relay pilots optionally accept `--idle-file /absolute/path/to/paused`. This explicitly injects
+Idle state for supervised testing; it is not the manual Pause action and does not
+detect OS locking automatically. Its parent directory must
+already exist and stay accessible; use a private directory owned by your user and
+a different marker on each machine. The pilot checks existence without reading
+file contents. Any existing entry (including a dangling symlink) pauses; metadata
+errors or a missing parent stop the pilot before further clipboard work.
+
+For example, create a private directory before launching:
+
+```sh
+mkdir -p "$HOME/.config/our-clipboard"
+chmod 700 "$HOME/.config/our-clipboard"
+```
+
+Append `--idle-file "$HOME/.config/our-clipboard/paused"` to the local pilot
+command. From another local terminal, pause it:
+
+```sh
+touch "$HOME/.config/our-clipboard/paused"
+```
+
+Wait for the local `[a] IDLE` or `[b] IDLE` status before treating the pause as
+acknowledged. While paused, the event loop does not read new local clipboard
+text, schedule local event publications or invoke clipboard writes. Already
+queued/in-flight network frames and native operations cannot be recalled. The
+existing native handles remain alive to preserve clipboard ownership; the gate
+is not an OS-level barrier or a cancellation mechanism for blocked native calls.
+
+Clock probes and authenticated inbound admission continue. Only the latest
+eligible remote envelope is kept in bounded memory, with its original signed
+TTL. Buffered Idle is not an application ACK. Expired/uncertain candidates are
+dropped even while paused. Entering Idle discards local pending publication; it
+is never replayed automatically after resuming.
+
+To resume, remove only the marker you created:
+
+```sh
+unlink "$HOME/.config/our-clipboard/paused"
+```
+
+Wait for `ACTIVE` (and `READY` if the pilot started paused). Native notifications
+are rebaselined without reading text or releasing ownership, so local copies
+made during Idle do not become new publications. A fresh remote candidate can
+then apply once and receive its signed application ACK; expired candidates stay
+discarded. New local copies after resume are observable normally. Neither
+resuming nor pausing restarts the authenticated session or renews TTL.
+
+Manual **Pause** has different semantics: add `--pause-file /absolute/path/to/pause`.
+Creating that marker ends the authenticated session and discards its pending text;
+there is no in-place resume or buffer replay. Remove the marker and start fresh
+pilot processes with new offers/fingerprints and a new quiet period. Ctrl+C also
+ends the session. Pause takes priority if both markers exist. These local marker
+paths are available only in relay mode and are never sent to the peer.
+
+Automatic X11/macOS screen-lock/suspend integration is still pending. Continue
+to stop the pilot before locking a real desktop; this gate provides explicit
+control and the integration point for future platform signals.
+
 ## Copy after both READY messages
 
 Wait for `[a] READY` and `[b] READY`. The default 30-second TTL requires about
@@ -137,7 +198,8 @@ desktop: automatic OS-lock/Idle hooks are not wired yet. Native backend operatio
 can still block between duration checks. Reconnect, discovery, production
 membership and persistent device enrollment are outside this pilot.
 
-CI tests real WSS on port 443, inner pinned TLS, independent confirmations, two
+CI tests paused startup, Idle buffering/expiry/resume and observer rebaseline,
+as well as real WSS on port 443, inner pinned TLS, independent confirmations, two
 Xvfb clipboards, signed ACKs, no echo and startup isolation in a private
 network-disabled container. `strace` asserts no endpoint `listen()` call and no
 connection before a rejected fingerprint confirmation. macOS builds and native

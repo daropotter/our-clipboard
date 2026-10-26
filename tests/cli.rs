@@ -256,3 +256,41 @@ fn relay_preflight_requires_credentials_and_works_without_clipboard() {
             .contains("OUR_CLIPBOARD_RELAY_TOKEN")
     );
 }
+
+#[cfg(feature = "clipboard")]
+#[test]
+fn paused_pilot_does_not_create_offers_or_require_transport_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("pause");
+    std::fs::write(&marker, []).unwrap();
+    let offer = dir.path().join("own.offer");
+    let output = Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
+        .args([
+            "pilot",
+            "--replace-clipboard",
+            "--relay",
+            "wss://localhost/our-clipboard/v1",
+            "--room",
+            &"1".repeat(64),
+            "--side",
+            "a",
+            "--offer",
+            offer.to_str().unwrap(),
+            "--peer-offer",
+            dir.path().join("peer.offer").to_str().unwrap(),
+            "--max-drift-ppm",
+            "1000",
+            "--clock-granularity-ms",
+            "1",
+            "--pause-file",
+            marker.to_str().unwrap(),
+        ])
+        .env_remove("OUR_CLIPBOARD_RELAY_TOKEN")
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8(output.stdout).unwrap().contains("PAUSED"));
+    assert!(!offer.exists());
+}

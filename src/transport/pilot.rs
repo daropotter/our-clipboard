@@ -41,6 +41,8 @@ struct Options {
     offer: Option<String>,
     peer_offer: Option<String>,
     relay_ca: Option<String>,
+    idle_file: Option<String>,
+    pause_file: Option<String>,
     seconds: u64,
     ttl: u32,
     drift: u32,
@@ -57,6 +59,8 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
         offer: None,
         peer_offer: None,
         relay_ca: None,
+        idle_file: None,
+        pause_file: None,
         seconds: 300,
         ttl: 30_000,
         drift: 0,
@@ -106,6 +110,18 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
             "--offer" => o.offer = Some(v.clone()),
             "--peer-offer" => o.peer_offer = Some(v.clone()),
             "--relay-ca" => o.relay_ca = Some(v.clone()),
+            "--pause-file" => {
+                if v.is_empty() {
+                    return Err("Pause marker path must not be empty.");
+                }
+                o.pause_file = Some(v.clone());
+            }
+            "--idle-file" => {
+                if v.is_empty() {
+                    return Err("Idle marker path must not be empty.");
+                }
+                o.idle_file = Some(v.clone());
+            }
             "--ssh" => {
                 if v.is_empty()
                     || v.starts_with('-')
@@ -178,6 +194,8 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
             || o.offer.is_some()
             || o.peer_offer.is_some()
             || o.relay_ca.is_some()
+            || o.idle_file.is_some()
+            || o.pause_file.is_some()
         {
             return Err("Relay options require --relay.");
         }
@@ -287,6 +305,29 @@ fn settings(own: PublicPeer, peer: PublicPeer, o: &Options) -> Result<Settings> 
         .map_err(|_| Error::Setup)?,
     })
 }
+fn idle_requested(path: Option<&str>) -> Result<bool> {
+    match path {
+        None => Ok(false),
+        // Follow neither file contents nor symlinks: any existing entry pauses.
+        Some(path) => {
+            let parent = Path::new(path)
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            if !std::fs::metadata(parent)
+                .map_err(|_| Error::Worker)?
+                .is_dir()
+            {
+                return Err(Error::Worker);
+            }
+            match std::fs::symlink_metadata(path) {
+                Ok(_) => Ok(true),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+                Err(_) => Err(Error::Worker),
+            }
+        }
+    }
+}
 fn session(
     input: impl Read + Send + 'static,
     mut output: impl Write + Send + 'static,
@@ -340,11 +381,43 @@ fn session(
     let mut clipboard: Option<ClipboardSession> = None;
     let mut outgoing: Option<Outgoing> = None;
     let mut next_retry = started;
+    let mut idle = false;
     eprintln!(
         "[{role}] Authenticated pilot connected. Waiting through the new-session quiet period; startup contents are ignored."
     );
     while wire::now()? < end {
         let now = wire::now()?;
+        if idle_requested(o.pause_file.as_deref())? {
+            protocol.close();
+            eprintln!(
+                "[{role}] PAUSED: session ended and pending text discarded; restart with fresh offers."
+            );
+            return Ok(());
+        }
+        let requested = idle_requested(o.idle_file.as_deref()).inspect_err(|_| {
+            eprintln!(
+                "[{role}] Idle marker unavailable; stopping before further clipboard access."
+            );
+        })?;
+        if requested != idle {
+            if !requested && let Some(session) = &mut clipboard {
+                session.rebaseline_observer().map_err(|_| Error::Worker)?;
+            }
+            protocol.set_idle(requested)?;
+            idle = requested;
+            // Never publish a retained local copy after a pause; already queued frames
+            // cannot be recalled. Fresh native changes are required after resuming.
+            outgoing = None;
+            if idle {
+                eprintln!(
+                    "[{role}] IDLE: local observation, new sends and clipboard writes paused."
+                );
+            } else {
+                eprintln!(
+                    "[{role}] ACTIVE: observer rebaselined; only new local copies are published."
+                );
+            }
+        }
         // Reader/writer queues each hold one bounded frame; backpressure never blocks the event loop.
         for _ in 0..MAX_FRAMES_PER_TICK {
             match incoming.try_recv() {
@@ -371,12 +444,20 @@ fn session(
                     }
                     Kind::Event => {
                         let event = SignedTextEvent::from_wire(&bytes).map_err(|_| Error::Frame)?;
-                        if let (Some(estimate), Some(session)) = (&estimate, &mut clipboard) {
-                            match protocol
-                                .receive_live(&event, estimate, session)
-                                .inspect_err(|_e| {
-                                    eprintln!("[{role}] Receive admission failed.");
-                                })? {
+                        if let Some(estimate) = &estimate
+                            && sent_ready
+                            && peer_ready
+                        {
+                            let result = if idle {
+                                protocol.receive_idle(&event, estimate)
+                            } else if let Some(session) = &mut clipboard {
+                                protocol.receive_live(&event, estimate, session)
+                            } else {
+                                continue;
+                            };
+                            match result.inspect_err(|_e| {
+                                eprintln!("[{role}] Receive admission failed.");
+                            })? {
                                 Some(
                                     d @ (DeliveryDecision::Applied { .. }
                                     | DeliveryDecision::AlreadyApplied { .. }),
@@ -392,6 +473,9 @@ fn session(
                                 }
                                 None => eprintln!(
                                     "[{role}] Peer write failed; latest event retained for bounded retry."
+                                ),
+                                Some(DeliveryDecision::BufferedIdle { .. }) => eprintln!(
+                                    "[{role}] Peer event buffered while Idle; no application receipt sent."
                                 ),
                                 Some(_) => eprintln!(
                                     "[{role}] Peer event skipped by age/order/session checks."
@@ -437,13 +521,13 @@ fn session(
         if !sent_ready && estimate.is_some() && protocol.ready()? {
             sent_ready = queue(&writer, Kind::Ready, vec![1])?;
         }
-        if clipboard.is_none() && sent_ready && peer_ready {
+        if !idle && clipboard.is_none() && sent_ready && peer_ready {
             clipboard = Some(ClipboardSession::new().map_err(|_| Error::Worker)?);
             eprintln!(
                 "[{role}] READY: copy new text now. Pilot changes the peer clipboard; contents are never logged."
             );
         }
-        if let Some(session) = &mut clipboard {
+        if !idle && let Some(session) = &mut clipboard {
             // Poll native local changes before retrying remote state, preserving local-copy order.
             if let Some(text) = session
                 .next_local_text(Duration::from_millis(NATIVE_POLL_MS))
@@ -491,6 +575,12 @@ fn session(
                 next_retry = now + APPLY_RETRY_INTERVAL_MS;
             }
         } else {
+            if idle && now >= next_retry {
+                if let Some(estimate) = &estimate {
+                    protocol.maintain_idle(estimate)?;
+                }
+                next_retry = now + APPLY_RETRY_INTERVAL_MS;
+            }
             thread::sleep(Duration::from_millis(5));
         }
         if outgoing.as_ref().is_some_and(|out| {
@@ -642,9 +732,16 @@ fn protocol_stdout() -> std::result::Result<std::fs::File, &'static str> {
 }
 pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
     if matches!(args,[arg] if arg=="--help"||arg=="-h") {
-        return Ok("Usage: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nRelay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
+        return Ok("Usage: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nRelay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. Optional --idle-file FILE pauses while the marker exists; metadata errors stop the pilot. This injects Idle state, not automatic screen-lock detection. Optional --pause-file FILE ends the session and discards pending text when present; resuming requires fresh pilots/offers. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
     }
     let o = options(args)?;
+    if idle_requested(o.pause_file.as_deref())
+        .map_err(|_| "Pause marker unavailable; pilot not started.")?
+    {
+        return Ok(
+            "PAUSED: pilot not started; remove the marker before creating a fresh session.".into(),
+        );
+    }
     #[cfg(target_os = "linux")]
     if std::env::var_os("WAYLAND_DISPLAY").is_some()
         || std::env::var("XDG_SESSION_TYPE").is_ok_and(|v| v == "wayland")
@@ -707,6 +804,28 @@ mod tests {
 #[cfg(test)]
 mod relay_tests {
     use super::*;
+    #[test]
+    fn idle_marker_is_content_free_and_errors_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("paused");
+        let name = path.to_str().unwrap();
+        assert_eq!(idle_requested(None), Ok(false));
+        assert_eq!(
+            idle_requested(dir.path().join("missing/marker").to_str()),
+            Err(Error::Worker)
+        );
+        assert_eq!(idle_requested(Some(name)), Ok(false));
+        std::fs::write(&path, []).unwrap();
+        assert_eq!(idle_requested(Some(name)), Ok(true));
+        let invalid = path.join("child");
+        assert_eq!(idle_requested(invalid.to_str()), Err(Error::Worker));
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("dangling");
+            std::os::unix::fs::symlink(dir.path().join("missing"), &link).unwrap();
+            assert_eq!(idle_requested(link.to_str()), Ok(true));
+        }
+    }
     #[test]
     fn relay_requires_complete_role_and_never_mixes_with_ssh() {
         let base = [

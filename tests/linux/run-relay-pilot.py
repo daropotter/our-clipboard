@@ -102,12 +102,13 @@ with tempfile.TemporaryDirectory() as directory:
         wait_for(lambda: inspect(":91", "inspect-request") and inspect(":92", "inspect-response"))
         room = secrets.token_hex(32)  # Public routing ID, not a credential.
         clients = {}
+        (root / "a.idle").touch()  # Start without initializing a native observer.
         for side, display, peer in (("a", ":91", "b"), ("b", ":92", "a")):
             args = ["strace", "-f", "-qq", "-e", "trace=listen", "-o", str(root / f"{side}.trace"),
                     binary, "pilot", "--replace-clipboard", "--relay", f"wss://localhost:{relay_port}/our-clipboard/v1",
                     "--relay-ca", str(cert), "--room", room, "--side", side,
                     "--offer", str(root / f"{side}.offer"), "--peer-offer", str(root / f"{peer}-for-{side}.offer"),
-                    "--seconds", "12", "--ttl-ms", "1000", "--max-drift-ppm", "1000",
+                    "--seconds", "14", "--ttl-ms", "1000", "--idle-file", str(root / f"{side}.idle"), "--pause-file", str(root / f"{side}.pause"), "--max-drift-ppm", "1000",
                     "--clock-granularity-ms", "1"]
             clients[side] = spawn(args, env=dict(env, DISPLAY=display),
                                   stdin=subprocess.PIPE, log=root / f"{side}.log")
@@ -121,6 +122,9 @@ with tempfile.TemporaryDirectory() as directory:
             clients[side].stdin.write((fingerprint + "\n").encode())
             clients[side].stdin.flush()
             clients[side].stdin.close()
+        wait_for(lambda: "IDLE:" in status(root / "a.log") and "READY:" in status(root / "b.log"))
+        assert "READY:" not in status(root / "a.log"), "Paused startup initialized the observer"
+        (root / "a.idle").unlink()
         wait_for(lambda: all("READY:" in status(root / f"{s}.log") for s in ("a", "b")))
         assert inspect(":91", "inspect-request") and inspect(":92", "inspect-response"), "Startup contents propagated"
         seed(":91", "seed-request")  # Same text, new local copy.
@@ -129,8 +133,48 @@ with tempfile.TemporaryDirectory() as directory:
         seed(":92", "seed-response")
         wait_for(lambda: inspect(":91", "inspect-response"), 5)
         wait_for(lambda: "Peer confirmed application." in status(root / "b.log"), 5)
+        # While paused, local copies are not read/published and remote values are
+        # buffered without writes/ACKs. Expiry keeps its original signed TTL.
+        pause = root / "b.idle"
+        pause.touch()
+        wait_for(lambda: status(root / "b.log").count("IDLE:") == 1)
+        local_before = status(root / "b.log").count("New local copy selected.")
+        seed(":92", "seed-request")
+        time.sleep(0.2)
+        assert inspect(":91", "inspect-response"), "Idle local copy was published"
+        seed(":91", "seed-response")
+        wait_for(lambda: "Peer event buffered while Idle" in status(root / "b.log"))
+        assert inspect(":92", "inspect-request"), "Idle remote event wrote clipboard"
+        time.sleep(1.4)
+        pause.unlink()
+        wait_for(lambda: "ACTIVE:" in status(root / "b.log"))
+        time.sleep(0.4)
+        assert inspect(":92", "inspect-request"), "Expired Idle event was applied"
+        assert inspect(":91", "inspect-response"), "Paused copy was replayed on resume"
+        assert status(root / "b.log").count("New local copy selected.") == local_before, "Observer replayed an Idle change"
+        # A new copy after resuming is observable, even with the same payload.
+        seed(":92", "seed-response")
+        wait_for(lambda: status(root / "b.log").count("Peer confirmed application.") == 2)
+        # A fresh pending value is applied once after resume, without TTL renewal.
+        pause.touch()
+        wait_for(lambda: status(root / "b.log").count("IDLE:") == 2)
+        buffered_before = status(root / "b.log").count("Peer event buffered while Idle")
+        seed(":91", "seed-request")
+        wait_for(lambda: status(root / "b.log").count("Peer event buffered while Idle") > buffered_before)
+        assert inspect(":92", "inspect-response"), "Idle buffer wrote before resume"
+        pause.unlink()
+        wait_for(lambda: inspect(":92", "inspect-request"))
+        wait_for(lambda: status(root / "a.log").count("Peer confirmed application.") == 2)
+        # Manual Pause ends the authenticated session; unlike Idle it cannot resume.
+        (root / "a.idle").touch()
+        wait_for(lambda: status(root / "a.log").count("IDLE:") == 2)
+        seed(":92", "seed-response")
+        wait_for(lambda: "Peer event buffered while Idle" in status(root / "a.log"))
+        assert inspect(":91", "inspect-request"), "Idle value applied before manual Pause"
+        (root / "a.pause").touch()
+        wait_for(lambda: "PAUSED: session ended" in status(root / "a.log"))
         for side, process in clients.items():
-            assert process.wait(timeout=20) == 0, "Pilot exited unsuccessfully"
+            assert process.wait(timeout=35) == 0, "Pilot exited unsuccessfully"
             assert "listen(" not in (root / f"{side}.trace").read_text(), "Endpoint tried to listen"
         bad = spawn(["strace", "-f", "-qq", "-e", "trace=listen,connect", "-o", str(root / "bad.trace"),
                      binary, "pilot", "--replace-clipboard", "--relay", f"wss://localhost:{relay_port}/our-clipboard/v1",
@@ -145,8 +189,9 @@ with tempfile.TemporaryDirectory() as directory:
         assert "connect(" not in (root / "bad.trace").read_text(), "Connected before fingerprint confirmation"
         assert "listen(" not in (root / "bad.trace").read_text(), "Rejected endpoint tried to listen"
         logs = status(root / "a.log") + status(root / "b.log")
-        assert logs.count("Applied peer event.") == 2, "Unexpected repeated application/echo"
-        print("Outbound WSS pilot passed: real HTTPS, pinned peer TLS, independent confirmations, startup isolation, bidirectional writes/ACKs and no client listen syscall.")
+        assert logs.count("Applied peer event.") == 3, "Unexpected repeated application/echo"
+        assert logs.count("Applied pending peer event.") == 1, "Buffered value was not applied exactly once"
+        print("Outbound WSS pilot passed: Idle startup/pause/resume/TTL, real HTTPS, pinned peer TLS, independent confirmations, startup isolation, bidirectional writes/ACKs and no client listen syscall.")
     except Exception:
         # Application statuses contain only public fingerprints and static operation names.
         for name in ("a.log", "b.log", "relay.log"):
