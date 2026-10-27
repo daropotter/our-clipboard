@@ -18,7 +18,9 @@ A [separately hosted relay](docs/RELAY-HOSTING.md), transport access credential 
 fingerprint confirmations are required. Signed events, original TTL and receiver
 ACKs remain active. Wait for both READY statuses before copying.
 The optional [SSH pilot](docs/PILOT.md) is available only where policy allows it.
-This is supervised testing; automatic lock/Idle integration is not connected yet.
+This is supervised testing. Relay pilots support an explicit local `--idle-file`
+Idle gate and a separate `--pause-file` session-ending action; automatic
+screen-lock integration is not connected yet.
 
 ## Direction
 

@@ -25,6 +25,13 @@ impl ClipboardSession {
         })
     }
 
+    /// Rebaseline notifications after Idle without reading text or releasing ownership.
+    /// Changes made while paused become the baseline, never new local publications.
+    pub fn rebaseline_observer(&mut self) -> Result<(), &'static str> {
+        self.watcher = Watcher::new()?;
+        Ok(())
+    }
+
     /// Apply a received value with a local marker, never by comparing text hashes.
     pub fn apply_received_text(&mut self, text: &str) -> Result<(), &'static str> {
         crate::text::validate(text).map_err(|error| error.message())?;

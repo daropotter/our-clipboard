@@ -283,6 +283,33 @@ impl Protocol {
     pub fn ready(&self) -> Result<bool> {
         Ok(now()? >= self.ready_at)
     }
+    pub fn close(&mut self) {
+        self.delivery.close();
+    }
+    pub fn set_idle(&mut self, idle: bool) -> Result<()> {
+        self.delivery.set_idle(idle).map_err(|_| Error::Worker)
+    }
+    pub fn maintain_idle(&mut self, estimate: &ClockEstimate) -> Result<()> {
+        self.delivery
+            .maintain(estimate, &SystemBootClock)
+            .map_err(|_| Error::Frame)
+    }
+    pub fn receive_idle(
+        &mut self,
+        event: &SignedTextEvent,
+        estimate: &ClockEstimate,
+    ) -> Result<Option<DeliveryDecision>> {
+        if !self.delivery.is_idle() {
+            return Err(Error::Setup);
+        }
+        // Deferred admission never calls this actuator. No native clipboard handle is needed.
+        self.delivery
+            .receive(event, &self.peer.key, estimate, &SystemBootClock, |_| {
+                Err(())
+            })
+            .map(Some)
+            .map_err(|_| Error::Frame)
+    }
     pub fn receive_live(
         &mut self,
         event: &SignedTextEvent,
