@@ -43,6 +43,7 @@ struct Options {
     relay_ca: Option<String>,
     idle_file: Option<String>,
     pause_file: Option<String>,
+    logind_idle: bool,
     seconds: u64,
     ttl: u32,
     drift: u32,
@@ -61,6 +62,7 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
         relay_ca: None,
         idle_file: None,
         pause_file: None,
+        logind_idle: false,
         seconds: 300,
         ttl: 30_000,
         drift: 0,
@@ -79,6 +81,10 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
         i += 1;
         if name == "--replace-clipboard" {
             consent = true;
+            continue;
+        }
+        if name == "--logind-idle" {
+            o.logind_idle = true;
             continue;
         }
         if name == "--stdio" {
@@ -196,6 +202,7 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
             || o.relay_ca.is_some()
             || o.idle_file.is_some()
             || o.pause_file.is_some()
+            || o.logind_idle
         {
             return Err("Relay options require --relay.");
         }
@@ -382,6 +389,10 @@ fn session(
     let mut outgoing: Option<Outgoing> = None;
     let mut next_retry = started;
     let mut idle = false;
+    #[cfg(target_os = "linux")]
+    let lock_monitor = o.logind_idle.then(crate::logind::Monitor::new);
+    #[cfg(target_os = "linux")]
+    let mut last_system_state = None;
     eprintln!(
         "[{role}] Authenticated pilot connected. Waiting through the new-session quiet period; startup contents are ignored."
     );
@@ -394,11 +405,25 @@ fn session(
             );
             return Ok(());
         }
-        let requested = idle_requested(o.idle_file.as_deref()).inspect_err(|_| {
+        let marker_idle = idle_requested(o.idle_file.as_deref()).inspect_err(|_| {
             eprintln!(
                 "[{role}] Idle marker unavailable; stopping before further clipboard access."
             );
         })?;
+        #[cfg(target_os = "linux")]
+        let system_idle = if let Some(monitor) = &lock_monitor {
+            let state = monitor.state();
+            if last_system_state != Some(state) {
+                eprintln!("[{role}] System session: {state:?}; unknown state keeps Idle.");
+                last_system_state = Some(state);
+            }
+            state != crate::logind::State::Active
+        } else {
+            false
+        };
+        #[cfg(not(target_os = "linux"))]
+        let system_idle = false;
+        let requested = marker_idle || system_idle;
         if requested != idle {
             if !requested && let Some(session) = &mut clipboard {
                 session.rebaseline_observer().map_err(|_| Error::Worker)?;
@@ -732,9 +757,15 @@ fn protocol_stdout() -> std::result::Result<std::fs::File, &'static str> {
 }
 pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
     if matches!(args,[arg] if arg=="--help"||arg=="-h") {
-        return Ok("Usage: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nRelay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. Optional --idle-file FILE pauses while the marker exists; metadata errors stop the pilot. This injects Idle state, not automatic screen-lock detection. Optional --pause-file FILE ends the session and discards pending text when present; resuming requires fresh pilots/offers. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
+        return Ok("Usage: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nRelay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. Optional --logind-idle observes the Linux/X11 logind session (unknown/stale means Idle). Optional --idle-file FILE pauses while the marker exists; metadata errors stop the pilot. This injects Idle state, not automatic screen-lock detection. Optional --pause-file FILE ends the session and discards pending text when present; resuming requires fresh pilots/offers. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
     }
     let o = options(args)?;
+    #[cfg(not(target_os = "linux"))]
+    if o.logind_idle {
+        return Err(
+            "--logind-idle requires Linux/X11 with systemd-logind; no fallback is enabled.",
+        );
+    }
     if idle_requested(o.pause_file.as_deref())
         .map_err(|_| "Pause marker unavailable; pilot not started.")?
     {

@@ -139,6 +139,23 @@ jobs:
             -v "$PWD/target/debug/examples/synthetic-clipboard-sync:/helper:ro" \
             -v "$PWD/tests/linux/run-relay-pilot.py:/run-relay-pilot.py:ro" \
             our-clipboard-relay-tests python3 /run-relay-pilot.py /pilot /helper
+  logind-idle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked --bin our-clipboard --example synthetic-clipboard-sync --example logind-fixture
+      - run: docker build -t our-clipboard-tests -f tests/linux/Dockerfile .
+      - run: docker build -t our-clipboard-relay-tests -f tests/linux/Dockerfile.relay .
+      - name: Private login1 sessions and native WSS Idle delivery
+        run: |
+          docker run --rm --network none \
+            -v "$PWD/target/debug/our-clipboard:/pilot:ro" \
+            -v "$PWD/target/debug/examples/synthetic-clipboard-sync:/helper:ro" \
+            -v "$PWD/target/debug/examples/logind-fixture:/logind-fixture:ro" \
+            -v "$PWD/tests/linux/run-relay-pilot.py:/run-relay-pilot.py:ro" \
+            our-clipboard-relay-tests python3 /run-relay-pilot.py /pilot /helper /logind-fixture
   relay-container:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

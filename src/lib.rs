@@ -5,6 +5,8 @@ pub mod freshness;
 #[cfg(all(feature = "clipboard", target_os = "linux"))]
 mod gnome;
 pub mod identity;
+#[cfg(all(feature = "clipboard", target_os = "linux"))]
+mod logind;
 #[cfg(feature = "clipboard")]
 mod origin;
 pub mod receipts;

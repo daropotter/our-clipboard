@@ -56,3 +56,8 @@ required-features = ["clipboard"]
 
 [dev-dependencies]
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+
+[[example]]
+name = "logind-fixture"
+path = "examples/logind-fixture.rs"
+required-features = ["clipboard"]

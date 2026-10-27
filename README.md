@@ -20,7 +20,8 @@ ACKs remain active. Wait for both READY statuses before copying.
 The optional [SSH pilot](docs/PILOT.md) is available only where policy allows it.
 This is supervised testing. Relay pilots support an explicit local `--idle-file`
 Idle gate and a separate `--pause-file` session-ending action; automatic
-screen-lock integration is not connected yet.
+macOS lock integration is pending. Linux/X11 can opt into experimental
+`--logind-idle` session observation; see its locker/polling limits in the guide.
 
 ## Direction
 

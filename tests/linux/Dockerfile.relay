@@ -1,5 +1,5 @@
 FROM our-clipboard-tests
 USER root
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssl python3 strace \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssl python3 strace dbus-daemon \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /tmp
