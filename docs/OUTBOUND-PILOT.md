@@ -121,12 +121,18 @@ opt-in and unsupported on macOS/Windows; there is no silent fallback there.
 No listener, root access, lock command, inhibitor or change to the desktop is
 installed. Without the flag, the existing supervised behavior stays unchanged.
 
-A worker resolves `GetSessionByPID` with the actual pilot PID, pins the unique
-login1 service owner and returned session path, and reads uncached session
-properties. Only a local `Type=x11`, `Class=user`, `Active=true`,
+A worker first resolves `GetSessionByPID` with the actual pilot PID. Some desktop
+terminals run under the user manager and have no direct logind session. In that
+case the worker opens the selected local X11 connection, obtains its server PID
+from kernel Unix-socket peer credentials, and resolves that PID instead. TCP X11
+cannot use this fallback. The returned session's `User` UID must match the pilot's
+effective UID; no environment-supplied session ID or guessed user Display is used.
+The display connection only establishes/verifies the binding and checks liveness;
+it never requests clipboard data. The unique login1 owner/session path are pinned
+and properties are read without caching. Only a local `Type=x11`, `Class=user`, `Active=true`,
 `LockedHint=false`, `Remote=false` session with manager `PreparingForSleep=false`
 can enable clipboard work. Missing/wrong-typed properties, unavailable login1,
-failed queries and an unsupported session remain Idle. No graphical backend is
+failed queries and an unsupported session remain Idle. No graphical clipboard backend is
 initialized until an eligible state and the protocol's existing quiet period
 and peer readiness permit it.
 

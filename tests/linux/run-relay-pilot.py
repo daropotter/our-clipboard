@@ -56,8 +56,9 @@ def offer_ready(path):
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
     try:
+        display_workers = {}
         for display in (":91", ":92"):
-            spawn(["Xvfb", display, "-screen", "0", "1280x720x24", "-nolisten", "tcp"])
+            display_workers[display] = spawn(["Xvfb", display, "-screen", "0", "1280x720x24", "-nolisten", "tcp"])
             wait_for(lambda: inspect(display, "check-display"))
         cert, key = root / "relay.pem", root / "relay.key"
         if external:
@@ -137,6 +138,7 @@ with tempfile.TemporaryDirectory() as directory:
                 wait_for(bus_path.exists)
                 system_env[side] = dict(env, DBUS_SYSTEM_BUS_ADDRESS=address)
                 system_state(side, "locked" if side == "a" else "active")
+                (root / f"{side}.pid").write_text(str(display_workers[":91" if side == "a" else ":92"].pid))
                 start_system(side)
         room = secrets.token_hex(32)  # Public routing ID, not a credential.
         clients = {}

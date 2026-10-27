@@ -15,6 +15,12 @@ mod fixture {
     impl Manager {
         #[zbus(name = "GetSessionByPID")]
         fn get_session_by_pid(&self, pid: u32) -> fdo::Result<OwnedObjectPath> {
+            let expected = std::fs::read_to_string(self.0.0.with_extension("pid"))
+                .ok()
+                .and_then(|p| p.parse::<u32>().ok());
+            if expected != Some(pid) {
+                return Err(fdo::Error::Failed("No session for this PID".into()));
+            }
             if pid == 0 {
                 return Err(fdo::Error::InvalidArgs("Explicit PID required".into()));
             }
@@ -28,6 +34,13 @@ mod fixture {
     struct Session(State);
     #[zbus::interface(name = "org.freedesktop.login1.Session")]
     impl Session {
+        #[zbus(property)]
+        fn user(&self) -> (u32, OwnedObjectPath) {
+            (
+                rustix::process::geteuid().as_raw(),
+                "/org/freedesktop/login1/user/test".try_into().unwrap(),
+            )
+        }
         #[zbus(property, name = "Type")]
         fn kind(&self) -> &str {
             "x11"
