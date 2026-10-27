@@ -12,6 +12,7 @@ import tempfile
 import time
 
 binary, helper = sys.argv[1:3]
+logind_fixture = sys.argv[3] if len(sys.argv) > 3 else None
 external = os.environ.get("OUR_CLIPBOARD_EXTERNAL_RELAY") == "1"
 relay_port = 8443 if external else 443
 children = []
@@ -55,8 +56,9 @@ def offer_ready(path):
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
     try:
+        display_workers = {}
         for display in (":91", ":92"):
-            spawn(["Xvfb", display, "-screen", "0", "1280x720x24", "-nolisten", "tcp"])
+            display_workers[display] = spawn(["Xvfb", display, "-screen", "0", "1280x720x24", "-nolisten", "tcp"])
             wait_for(lambda: inspect(display, "check-display"))
         cert, key = root / "relay.pem", root / "relay.key"
         if external:
@@ -100,6 +102,44 @@ with tempfile.TemporaryDirectory() as directory:
         seed(":91", "seed-request")
         seed(":92", "seed-response")
         wait_for(lambda: inspect(":91", "inspect-request") and inspect(":92", "inspect-response"))
+        system_env = {}
+        system_workers = {}
+        def system_state(side, state):
+            path = root / f"{side}.system"
+            temp = root / f"{side}.system.tmp"
+            temp.write_text(state)
+            temp.replace(path)
+        def start_system(side):
+            ready = root / f"{side}.system-ready"
+            if ready.exists():
+                ready.unlink()
+            system_workers[side] = spawn([logind_fixture, str(root / f"{side}.system"), str(ready)],
+                                         env=system_env[side])
+            wait_for(ready.exists)
+        def enter_idle(side):
+            before = status(root / f"{side}.log").count("IDLE:")
+            if logind_fixture:
+                system_state(side, "locked")
+            else:
+                (root / f"{side}.idle").touch()
+            wait_for(lambda: status(root / f"{side}.log").count("IDLE:") > before)
+        def leave_idle(side):
+            before = status(root / f"{side}.log").count("ACTIVE:")
+            if logind_fixture:
+                system_state(side, "active")
+            else:
+                (root / f"{side}.idle").unlink()
+            wait_for(lambda: status(root / f"{side}.log").count("ACTIVE:") > before)
+        if logind_fixture:
+            for side in ("a", "b"):
+                bus_path = root / f"{side}.bus"
+                address = "unix:path=" + str(bus_path)
+                spawn(["dbus-daemon", "--session", "--nofork", "--address=" + address])
+                wait_for(bus_path.exists)
+                system_env[side] = dict(env, DBUS_SYSTEM_BUS_ADDRESS=address)
+                system_state(side, "locked" if side == "a" else "active")
+                (root / f"{side}.pid").write_text(str(display_workers[":91" if side == "a" else ":92"].pid))
+                start_system(side)
         room = secrets.token_hex(32)  # Public routing ID, not a credential.
         clients = {}
         (root / "a.idle").touch()  # Start without initializing a native observer.
@@ -110,7 +150,9 @@ with tempfile.TemporaryDirectory() as directory:
                     "--offer", str(root / f"{side}.offer"), "--peer-offer", str(root / f"{peer}-for-{side}.offer"),
                     "--seconds", "14", "--ttl-ms", "1000", "--idle-file", str(root / f"{side}.idle"), "--pause-file", str(root / f"{side}.pause"), "--max-drift-ppm", "1000",
                     "--clock-granularity-ms", "1"]
-            clients[side] = spawn(args, env=dict(env, DISPLAY=display),
+            if logind_fixture:
+                args.append("--logind-idle")
+            clients[side] = spawn(args, env=dict(system_env.get(side, env), DISPLAY=display),
                                   stdin=subprocess.PIPE, log=root / f"{side}.log")
         wait_for(lambda: offer_ready(root / "a.offer") and offer_ready(root / "b.offer"))
         for side, peer in (("a", "b"), ("b", "a")):
@@ -125,6 +167,10 @@ with tempfile.TemporaryDirectory() as directory:
         wait_for(lambda: "IDLE:" in status(root / "a.log") and "READY:" in status(root / "b.log"))
         assert "READY:" not in status(root / "a.log"), "Paused startup initialized the observer"
         (root / "a.idle").unlink()
+        if logind_fixture:
+            time.sleep(0.2)
+            assert "READY:" not in status(root / "a.log"), "Manual marker bypassed locked system session"
+            leave_idle("a")
         wait_for(lambda: all("READY:" in status(root / f"{s}.log") for s in ("a", "b")))
         assert inspect(":91", "inspect-request") and inspect(":92", "inspect-response"), "Startup contents propagated"
         seed(":91", "seed-request")  # Same text, new local copy.
@@ -135,9 +181,7 @@ with tempfile.TemporaryDirectory() as directory:
         wait_for(lambda: "Peer confirmed application." in status(root / "b.log"), 5)
         # While paused, local copies are not read/published and remote values are
         # buffered without writes/ACKs. Expiry keeps its original signed TTL.
-        pause = root / "b.idle"
-        pause.touch()
-        wait_for(lambda: status(root / "b.log").count("IDLE:") == 1)
+        enter_idle("b")
         local_before = status(root / "b.log").count("New local copy selected.")
         seed(":92", "seed-request")
         time.sleep(0.2)
@@ -146,7 +190,7 @@ with tempfile.TemporaryDirectory() as directory:
         wait_for(lambda: "Peer event buffered while Idle" in status(root / "b.log"))
         assert inspect(":92", "inspect-request"), "Idle remote event wrote clipboard"
         time.sleep(1.4)
-        pause.unlink()
+        leave_idle("b")
         wait_for(lambda: "ACTIVE:" in status(root / "b.log"))
         time.sleep(0.4)
         assert inspect(":92", "inspect-request"), "Expired Idle event was applied"
@@ -156,21 +200,35 @@ with tempfile.TemporaryDirectory() as directory:
         seed(":92", "seed-response")
         wait_for(lambda: status(root / "b.log").count("Peer confirmed application.") == 2)
         # A fresh pending value is applied once after resume, without TTL renewal.
-        pause.touch()
-        wait_for(lambda: status(root / "b.log").count("IDLE:") == 2)
+        enter_idle("b")
         buffered_before = status(root / "b.log").count("Peer event buffered while Idle")
         seed(":91", "seed-request")
         wait_for(lambda: status(root / "b.log").count("Peer event buffered while Idle") > buffered_before)
         assert inspect(":92", "inspect-response"), "Idle buffer wrote before resume"
-        pause.unlink()
+        leave_idle("b")
         wait_for(lambda: inspect(":92", "inspect-request"))
         wait_for(lambda: status(root / "a.log").count("Peer confirmed application.") == 2)
         # Manual Pause ends the authenticated session; unlike Idle it cannot resume.
-        (root / "a.idle").touch()
-        wait_for(lambda: status(root / "a.log").count("IDLE:") == 2)
+        enter_idle("a")
         seed(":92", "seed-response")
         wait_for(lambda: "Peer event buffered while Idle" in status(root / "a.log"))
         assert inspect(":91", "inspect-request"), "Idle value applied before manual Pause"
+        if logind_fixture:
+            for state in ("inactive", "sleep", "unknown"):
+                system_state("a", state)
+                time.sleep(0.2)
+                expected = "Unknown" if state == "unknown" else "Idle"
+                wait_for(lambda: f"System session: {expected}" in status(root / "a.log"))
+                assert inspect(":91", "inspect-request"), "System Idle wrote native clipboard"
+            # A replacement well-known service must not unlock the pinned monitor.
+            system_workers["a"].terminate()
+            system_workers["a"].wait(timeout=3)
+            system_state("a", "active")
+            start_system("a")
+            active_before = status(root / "a.log").count("ACTIVE:")
+            time.sleep(0.5)
+            assert status(root / "a.log").count("ACTIVE:") == active_before, "Replacement login1 unlocked session"
+            assert inspect(":91", "inspect-request"), "Unknown system state wrote clipboard"
         (root / "a.pause").touch()
         wait_for(lambda: "PAUSED: session ended" in status(root / "a.log"))
         for side, process in clients.items():

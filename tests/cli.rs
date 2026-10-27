@@ -294,3 +294,40 @@ fn paused_pilot_does_not_create_offers_or_require_transport_credentials() {
     assert!(String::from_utf8(output.stdout).unwrap().contains("PAUSED"));
     assert!(!offer.exists());
 }
+
+#[cfg(all(feature = "clipboard", not(target_os = "linux")))]
+#[test]
+fn logind_option_has_no_silent_fallback_on_other_platforms() {
+    let directory = tempfile::tempdir().unwrap();
+    let offer = directory.path().join("own.offer");
+    let output = Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
+        .args([
+            "pilot",
+            "--replace-clipboard",
+            "--relay",
+            "wss://localhost/our-clipboard/v1",
+            "--room",
+            &"1".repeat(64),
+            "--side",
+            "a",
+            "--offer",
+            offer.to_str().unwrap(),
+            "--peer-offer",
+            directory.path().join("peer.offer").to_str().unwrap(),
+            "--max-drift-ppm",
+            "1000",
+            "--clock-granularity-ms",
+            "1",
+            "--logind-idle",
+        ])
+        .env_remove("OUR_CLIPBOARD_RELAY_TOKEN")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("requires Linux/X11")
+    );
+    assert!(!offer.exists());
+}

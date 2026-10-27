@@ -113,6 +113,57 @@ should join the same relay room within two minutes. Old offers cannot be reused
 with a restarted process: start fresh processes and exchange new offers.
 This is manual test enrollment, not the final pairing-code protocol.
 
+## Optional Linux/X11 session observation
+
+On Linux/X11 relay pilots, append `--logind-idle` to observe the session containing
+this process through the system D-Bus `org.freedesktop.login1` service. It is
+opt-in and unsupported on macOS/Windows; there is no silent fallback there.
+No listener, root access, lock command, inhibitor or change to the desktop is
+installed. Without the flag, the existing supervised behavior stays unchanged.
+
+A worker first resolves `GetSessionByPID` with the actual pilot PID. Some desktop
+terminals run under the user manager and have no direct logind session. In that
+case the worker opens the selected local X11 connection, obtains its server PID
+from kernel Unix-socket peer credentials, and resolves that PID instead. TCP X11
+cannot use this fallback. The returned session's `User` UID must match the pilot's
+effective UID; no environment-supplied session ID or guessed user Display is used.
+The display connection only establishes/verifies the binding and checks liveness;
+it never requests clipboard data. The unique login1 owner/session path are pinned
+and properties are read without caching. Only a local `Type=x11`, `Class=user`, `Active=true`,
+`LockedHint=false`, `Remote=false` session with manager `PreparingForSleep=false`
+can enable clipboard work. Missing/wrong-typed properties, unavailable login1,
+failed queries and an unsupported session remain Idle. No graphical clipboard backend is
+initialized until an eligible state and the protocol's existing quiet period
+and peer readiness permit it.
+
+The event loop never waits on D-Bus. Worker method calls time out at 200 ms and
+poll about every 75 ms; samples older than 300 ms become Unknown/Idle. Freshness
+uses the native suspend-aware boot clock, timestamped **before** each query, so
+an old pre-suspend observation cannot acquire a new timestamp on return. These
+are scheduling bounds, not a real-time OS guarantee. A blocked worker cannot
+silently leave an indefinitely Active cache.
+
+Status lines distinguish `System session: Active`, `Idle` and `Unknown`. Unknown
+always gates the clipboard. A manual `--idle-file` marker combines with this gate
+using OR: removing the marker cannot override a locked/unknown system session.
+Manual Pause still ends the session immediately when the event loop observes it.
+The existing observer rebaseline, original TTL and signed application ACK rules
+apply unchanged to system-driven Idle transitions.
+
+The monitor deliberately does not rebind to another service owner/session during
+a pilot. A login1 restart, bus loss or failed initial setup requires a fresh
+pilot; it does not grant automatic clipboard access. Ordinary property-query
+failures on the same live owner can recover after a new valid sample.
+
+**Deployment limitation:** `LockedHint` is cooperative desktop state, not an
+OS-enforced security barrier. Not every X11 locker updates it correctly. Querying
+state also has polling latency and cannot cancel an already running native call
+or queued network frame. Verify your actual desktop/locker updates the hint and
+active/sleep state before relying on this experimental gate. CI exercises a
+private login1 service and real native clipboards, not a physical desktop lock.
+Continue supervised testing; macOS lock observation is still pending, and the
+manual Idle marker is a test/control mechanism rather than an automatic hook.
+
 ## Explicit local Idle control
 
 Relay pilots optionally accept `--idle-file /absolute/path/to/paused`. This explicitly injects
@@ -170,7 +221,8 @@ pilot processes with new offers/fingerprints and a new quiet period. Ctrl+C also
 ends the session. Pause takes priority if both markers exist. These local marker
 paths are available only in relay mode and are never sent to the peer.
 
-Automatic X11/macOS screen-lock/suspend integration is still pending. Continue
+Native macOS lock integration and physical X11 locker certification are still
+pending. The optional Linux/X11 logind observer is described above. Continue
 to stop the pilot before locking a real desktop; this gate provides explicit
 control and the integration point for future platform signals.
 
