@@ -553,7 +553,7 @@ fn open_wss_controlled(
                 .is_none() =>
         {
             if e.kind() == io::ErrorKind::TimedOut
-                || control.is_some_and(|c| Instant::now() >= c.until)
+                || control.is_some_and(|_| Instant::now() >= until)
             {
                 RelayError::Timeout
             } else {
@@ -610,6 +610,11 @@ pub(crate) fn connect_controlled(
         outer,
     } = options;
     let (mut stream, guard) = open_wss_controlled(url, token, outer, control)?;
+    // The outer setup cap can be earlier than the controller's total budget.
+    let setup_until = match stream.ws.get_ref() {
+        MaybeTlsStream::Rustls(s) => s.sock.effective_deadline(),
+        _ => None,
+    };
     let mut join = b"OCRJ\x01".to_vec();
     join.extend(room.0);
     join.push(side.byte());
@@ -618,7 +623,7 @@ pub(crate) fn connect_controlled(
         .send(Message::Binary(join.into()))
         .map_err(|error| {
             if matches!(error, tungstenite::Error::Io(_))
-                && control.is_some_and(|c| Instant::now() >= c.until)
+                && setup_until.is_some_and(|until| Instant::now() >= until)
             {
                 RelayError::Timeout
             } else {
