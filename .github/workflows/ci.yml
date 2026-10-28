@@ -139,6 +139,25 @@ jobs:
             -v "$PWD/target/debug/examples/synthetic-clipboard-sync:/helper:ro" \
             -v "$PWD/tests/linux/run-relay-pilot.py:/run-relay-pilot.py:ro" \
             our-clipboard-relay-tests python3 /run-relay-pilot.py /pilot /helper
+  reconnect-pilot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked --bin our-clipboard --example synthetic-clipboard-sync
+      - run: docker build -t our-clipboard-tests -f tests/linux/Dockerfile .
+      - run: docker build -t our-clipboard-relay-tests -f tests/linux/Dockerfile.relay .
+      - name: Real WSS outage, original TTL, cancellation and auth rejection
+        run: |
+          for scenario in 1 auth; do
+            docker run --rm --network none -e OUR_CLIPBOARD_TEST_RECONNECT="$scenario" \
+              -v "$PWD/target/debug/our-clipboard:/pilot:ro" \
+              -v "$PWD/target/debug/examples/synthetic-clipboard-sync:/helper:ro" \
+              -v "$PWD/tests/linux/run-relay-pilot.py:/run-relay-pilot.py:ro" \
+              -v "$PWD/tests/linux/reconnect_scenario.py:/reconnect_scenario.py:ro" \
+              our-clipboard-relay-tests python3 /run-relay-pilot.py /pilot /helper
+          done
   logind-idle:
     runs-on: ubuntu-24.04
     timeout-minutes: 10

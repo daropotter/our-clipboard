@@ -92,7 +92,9 @@ operation. Never use a full `docker inspect` dump for support.
 For a replacement image, transfer the tested image first, update only
 `/etc/our-clipboard/image.env`, then run `sudo systemctl restart
 our-clipboard-stage.service`. Compose recreates the relay. Keep the previous image
-ID for rollback. Any restart ends active pilots; start fresh processes/offers.
+ID for rollback. A restart drops active transports. Still-running clients with `--reconnect` can
+recover their authenticated session within original TTL; otherwise start fresh
+processes/offers. Client restart or manual Pause always requires new enrollment.
 
 The public certificate renews through Caddy automatically. The separate upstream
 certificate is static. Before its expiry, generate a new Ed25519 server key and
@@ -123,5 +125,5 @@ rollback; do not restart or stop the shared stage ingress.
   capability drop, memory limit and enabled boot service were checked live.
 
 This validates the deployed path with two controlled Linux clients. A physical
-X11↔macOS pair is still a manual test; automatic lock handling, reconnect,
+X11↔macOS pair is still a manual test; experimental native lock gates and reconnect need separate physical validation;
 production enrollment and fair per-user relay quotas remain outside this pilot.

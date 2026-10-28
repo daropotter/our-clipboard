@@ -28,6 +28,6 @@ pairing, wrong CA/token/peer rejection, bidirectional pinned TLS, duplicate rela
 slots, full-duplex transfers and malformed-record classification. These tests run
 in isolated containers where workstation policy prohibits listeners.
 
-The pilot reconnect integration is a separate increment built on this primitive.
-It must retain the logical signing session, clock/order state and original TTL,
-and explicitly validate the same peer before using a replacement transport.
+The [relay pilot reconnect option](OUTBOUND-PILOT.md) builds on this primitive.
+It retains the logical signing session, clock/order state and original TTL and
+validates the same peer before using a replacement transport.

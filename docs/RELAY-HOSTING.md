@@ -111,8 +111,9 @@ the injected environment.
 
 The relay reads TLS files once at startup. After renewing the certificate/key,
 preserve ownership and private permissions, then restart the container to load
-them. Restart ends active sessions. Start fresh pilots and exchange fresh offers;
-there is no automatic reconnect or clipboard replay.
+them. Restart ends active transports. Two still-running pilots using `--reconnect` can
+recover the same authenticated session with original TTL. Otherwise start fresh
+pilots/offers; a restarted client or manual Pause always requires new enrollment.
 
 Updating the image or access credential requires recreating the container with
 the same run options. Coordinate a credential change with both clients. Keep the
@@ -121,8 +122,8 @@ Do not delete your certificate-manager state during container replacement.
 
 This remains a supervised pilot, not a hardened public hosting service. The relay
 bounds sockets (32), waiting rooms (16), records, setup waits and paired lifetime
-(one hour). Per-user fair quotas, live credential rotation, reconnect and automatic
-OS-lock integration are still pending. Never lock either desktop while its pilot
+(one hour). Per-user fair quotas and live credential rotation remain pending. Client reconnect
+and the experimental OS-session gates are opt-in; see the outbound pilot guide. Never lock either desktop while its pilot
 is active.
 
 ## Container integration check

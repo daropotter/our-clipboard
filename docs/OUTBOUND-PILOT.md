@@ -113,6 +113,64 @@ should join the same relay room within two minutes. Old offers cannot be reused
 with a restarted process: start fresh processes and exchange new offers.
 This is manual test enrollment, not the final pairing-code protocol.
 
+## Optional reconnect within the same running session
+
+Add `--reconnect` to **both** relay pilot commands to recover from transport loss.
+First pairing still requires fresh offers and independent fingerprint confirmation;
+this flag does not retry failed initial enrollment or authorize a different peer.
+SSH/stdio pilots reject the option. Default relay behavior still ends on disconnect.
+
+While the process stays alive, reconnect retains its original TLS identity,
+signing key/session, durable counters/order state, native observer and latest
+bounded pending envelopes. New local copies observed while Active but offline
+remain eligible only within their **original signed TTL**. Expired text is dropped;
+resuming never re-signs or publishes the current clipboard merely because a
+connection returned. Idle still suppresses local observation and application.
+Manual Pause ends the session and releases pending text, including during setup.
+
+Every replacement transport validates the configured WSS hostname/CA/access
+credential and the same independently pinned inner peer certificate. Its public
+signing key **and** application session must exactly match the established peer.
+Then fresh signed clock calibration and readiness are exchanged. This reconnect
+uses the existing application session/quiet-period boundary; it does not create
+a new session, reset Lamport/sequence/replay state or renew the TTL. A restarted
+peer, changed certificate/key/session, malformed protocol or observed authentication
+rejection stops the pilot rather than silently enrolling/retrying it.
+
+Clock estimates are not assumed fresh after reconnect. Native writes/pending
+retries wait for refreshed readiness; maintenance during disconnection retains
+original expiry and may conservatively discard candidates when clock bounds
+become uncertain. The receiver rechecks full signed freshness/order before any
+application and produces an application ACK only for a successful write/duplicate.
+
+The event loop stays responsive to Idle/Pause during an attempt. At most one
+attempt runs, with a nominal 10-second setup budget capped by the remaining pilot
+lifetime. Retryable transport/capacity failures use jittered delays from about
+250 ms up to four seconds. All offline time counts toward `--seconds`. OS DNS
+resolution and already executing native calls cannot be cancelled by these
+budgets; cancelled resolution cannot initiate a new connection if it later returns.
+Already queued/in-flight frames cannot be recalled, and partial frames from an
+old transport are discarded, never spliced into a new one.
+
+A silent connection also becomes unusable when no signed clock sample has been
+validated for 21 seconds (the 20-second calibration lifetime plus probe timeout).
+The reconnect owner closes that transport; there is no unsafe age fallback.
+`DISCONNECTED`, `RECONNECTING` and `RECONNECTED` report transport/session progress.
+`RECONNECTED` confirms refreshed session readiness, not clipboard delivery; look
+for the receiver-signed application confirmation separately.
+
+This still uses one explicitly configured relay. It does not discover services,
+switch providers, restore a crashed process or persist text. Relay waiting-room,
+capacity and session-lifetime limits remain in effect; recovery is not an
+availability guarantee. A new process or a manual Pause still requires fresh
+offers and the usual new-session quiet period.
+
+CI restarts an isolated real WSS relay between native copies, verifies fresh
+offline delivery, expired-text rejection, new copies of identical text after
+recovery, no echo, unchanged application session and responsive Pause while the
+peer is absent. A separate case changes the relay credential and requires a
+terminal authentication error. These fault tests never target the stage service.
+
 ## Optional macOS caller/console observation
 
 On macOS relay pilots, append `--macos-session-idle`. First inspect the current
@@ -319,8 +377,8 @@ assessment fails closed rather than using UTC or renewing TTL.
 
 Stop with Ctrl+C or wait for the five-minute duration. Stop before locking either
 desktop: automatic OS-lock/Idle hooks are not wired yet. Native backend operations
-can still block between duration checks. Reconnect, discovery, production
-membership and persistent device enrollment are outside this pilot.
+can still block between duration checks. Automatic discovery, production membership and persistent device enrollment are
+outside this pilot; relay-only reconnect is opt-in as described above.
 
 CI tests paused startup, Idle buffering/expiry/resume and observer rebaseline,
 as well as real WSS on port 443, inner pinned TLS, independent confirmations, two
