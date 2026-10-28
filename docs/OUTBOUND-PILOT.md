@@ -113,6 +113,78 @@ should join the same relay room within two minutes. Old offers cannot be reused
 with a restarted process: start fresh processes and exchange new offers.
 This is manual test enrollment, not the final pairing-code protocol.
 
+## Optional macOS caller/console observation
+
+On macOS relay pilots, append `--macos-session-idle`. First inspect the current
+state without pairing, network access or clipboard data access:
+
+```sh
+./target/debug/our-clipboard doctor --session
+```
+
+It reports only Active/Idle, or exits with Unknown when the native schema cannot
+be verified. It never logs a session dictionary, username, UID or clipboard text.
+The diagnostic is macOS-only; other systems reject the pilot flag before offers
+or transport setup. Existing behavior is unchanged unless you opt in.
+
+A worker reads the **calling process's** Core Graphics session dictionary before
+and after an IOKit root-property lookup. The UID must match the effective UID,
+the two session snapshots must agree, login must be complete and the caller must
+be on console. UID/console-set binding is retained for that pilot; a different
+binding stays Unknown rather than silently rebinding. Console-set identifies
+hardware, not a cryptographic login identity; stop/restart pilots across logout
+or WindowServer replacement.
+
+The IOKit `IOConsoleLocked` property must exist with exact CFBoolean type. Only
+an explicit false can permit Active. A present positive session lock hint also
+forces Idle; its absence is **not** an unlock signal. Missing/wrong-typed required
+fields, null dictionaries, native failures and inconsistent snapshots become
+Unknown/Idle. This covers locked startup without trusting an unlock notification
+that occurred before the process started. No event-only unlock fallback exists.
+
+Like the Linux gate, observations run separately from clipboard work, about every
+75 ms; samples older than 300 ms become Unknown. The suspend-aware boot timestamp
+is taken before native I/O, so a blocked or suspended read cannot renew an old
+Active result. Framework calls have no cancellation deadline; a stalled worker
+leaves the event loop responsive and its cache expires. Manual Idle combines by
+OR, Pause takes priority, and resuming retains original TTL/observer rebaseline.
+
+**Experimental schema:** the framework functions are public, but the registry
+lock key and supplemental session lock hint are not a supported public lock-state
+contract. They are described in Apple's open-source kernel. A macOS change may
+leave the gate Unknown, and polling/native operations have latency; this is not
+an OS-enforced privacy barrier. No settings, lock commands, inhibitors,
+permissions or listeners are installed. Continue supervised operation and stop
+pilots before locking real desktops until your OS/lock/suspend behavior has been
+verified with synthetic text. Physical Mac lock/unlock/sleep validation remains
+manual; CI validates framework linking, strict native types, initial-state policy
+and conservative clock/binding transitions without locking the runner.
+
+For the first physical check, keep all clipboard pilots stopped and run only
+this local diagnostic loop in Terminal:
+
+```sh
+while true; do
+  ./target/debug/our-clipboard doctor --session
+  sleep 1
+done
+```
+
+Manually lock/unlock or switch users, then inspect the state lines after returning.
+A locked/off-console session must never report Active. Stop with Ctrl+C. Unknown
+means this adapter cannot verify that environment; it is not a successful unlock.
+The loop needs no clipboard permissions or relay credential. Only after that
+check should a separately supervised synthetic-text pilot test exercise the gate.
+
+Sources for the implemented distinction:
+
+- [CGSessionCopyCurrentDictionary](https://developer.apple.com/documentation/coregraphics/cgsessioncopycurrentdictionary())
+  and [standard session properties](https://developer.apple.com/documentation/coregraphics/window-server-session-properties).
+- Apple's [IOKitKeysPrivate.h](https://github.com/apple-oss-distributions/xnu/blob/main/iokit/IOKit/IOKitKeysPrivate.h)
+  identifies the registry schema; [IOService.cpp](https://github.com/apple-oss-distributions/xnu/blob/main/iokit/Kernel/IOService.cpp)
+  publishes the console lock state, including system-sleep transitions. These
+  implementation details are not treated as a compatibility guarantee.
+
 ## Optional Linux/X11 session observation
 
 On Linux/X11 relay pilots, append `--logind-idle` to observe the session containing
@@ -161,7 +233,7 @@ state also has polling latency and cannot cancel an already running native call
 or queued network frame. Verify your actual desktop/locker updates the hint and
 active/sleep state before relying on this experimental gate. CI exercises a
 private login1 service and real native clipboards, not a physical desktop lock.
-Continue supervised testing; macOS lock observation is still pending, and the
+Continue supervised testing; macOS observation has its own experimental adapter above, and the
 manual Idle marker is a test/control mechanism rather than an automatic hook.
 
 ## Explicit local Idle control
@@ -221,8 +293,8 @@ pilot processes with new offers/fingerprints and a new quiet period. Ctrl+C also
 ends the session. Pause takes priority if both markers exist. These local marker
 paths are available only in relay mode and are never sent to the peer.
 
-Native macOS lock integration and physical X11 locker certification are still
-pending. The optional Linux/X11 logind observer is described above. Continue
+Physical Mac lock/suspend and X11 locker certification are still pending. Both
+optional platform observers and their limits are described above. Continue
 to stop the pilot before locking a real desktop; this gate provides explicit
 control and the integration point for future platform signals.
 

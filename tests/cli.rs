@@ -331,3 +331,59 @@ fn logind_option_has_no_silent_fallback_on_other_platforms() {
     );
     assert!(!offer.exists());
 }
+
+#[cfg(all(feature = "clipboard", not(target_os = "macos")))]
+#[test]
+fn macos_session_option_never_falls_back_on_another_os() {
+    let dir = tempfile::tempdir().unwrap();
+    let offer = dir.path().join("own.offer");
+    let output = Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
+        .args([
+            "pilot",
+            "--replace-clipboard",
+            "--relay",
+            "wss://localhost/our-clipboard/v1",
+            "--room",
+            &"1".repeat(64),
+            "--side",
+            "a",
+            "--offer",
+            offer.to_str().unwrap(),
+            "--peer-offer",
+            dir.path().join("peer.offer").to_str().unwrap(),
+            "--max-drift-ppm",
+            "1000",
+            "--clock-granularity-ms",
+            "1",
+            "--macos-session-idle",
+        ])
+        .env_remove("OUR_CLIPBOARD_RELAY_TOKEN")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("requires macOS")
+    );
+    assert!(!offer.exists());
+}
+
+#[cfg(all(feature = "clipboard", target_os = "macos"))]
+#[test]
+fn macos_session_diagnostics_never_claim_clipboard_delivery() {
+    let output = cli(&["doctor", "--session"]);
+    if output.status.success() {
+        let status = String::from_utf8(output.stdout).unwrap();
+        assert!(status.contains("Active") || status.contains("Idle"));
+        assert!(status.contains("No clipboard data accessed"));
+    } else {
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("Unknown")
+        );
+        assert!(output.stdout.is_empty());
+    }
+}

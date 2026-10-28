@@ -474,3 +474,16 @@ mod pilot;
 pub use pilot::run as run_pilot;
 
 pub mod outbound;
+
+/// Read only macOS session metadata; never initializes the clipboard or transport.
+#[cfg(all(feature = "clipboard", target_os = "macos"))]
+pub fn macos_session_probe() -> std::result::Result<String, &'static str> {
+    match crate::macos_session::probe() {
+        crate::macos_session::State::Unknown => {
+            Err("macOS session state is Unknown; clipboard access would remain Idle.")
+        }
+        state => Ok(format!(
+            "macOS session state: {state:?}. No clipboard data accessed."
+        )),
+    }
+}

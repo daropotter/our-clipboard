@@ -55,6 +55,9 @@ Clipboard integration is disabled. Synchronization is not implemented yet.";
 
 fn help() -> String {
     let mut text = HELP.to_owned();
+    if cfg!(all(feature = "clipboard", target_os = "macos")) {
+        text.push_str("\n  doctor --session  Read macOS session state without clipboard access");
+    }
     if cfg!(feature = "os-keyring") {
         text.push_str("\n\nIdentity (system credential store):\n  identity init [--profile name]\n  identity show [--profile name]");
     }
@@ -99,6 +102,8 @@ fn run(args: &[String]) -> Result<String, &'static str> {
         ["identity", action @ ("init" | "show"), "--profile", profile] => {
             our_clipboard::identity::manage(action, profile).map_err(|error| error.message())
         }
+        #[cfg(all(feature = "clipboard", target_os = "macos"))]
+        ["doctor", "--session"] => our_clipboard::transport::macos_session_probe(),
         ["state-probe"] => {
             our_clipboard::freshness::durable_probe().map_err(|error| error.message())
         }
