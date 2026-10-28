@@ -175,6 +175,7 @@ jobs:
             -v "$PWD/target/debug/examples/synthetic-clipboard-sync:/helper:ro" \
             -v "$PWD/tests/linux/run-relay-pilot.py:/run-relay-pilot.py:ro" \
             -v "$PWD/tests/linux/reconnect_scenario.py:/reconnect_scenario.py:ro" \
+            -v "$PWD/tests/identity/preflight_scenario.py:/preflight_scenario.py:ro" \
             -v "$PWD/tests/identity/peer_pin_scenario.py:/peer_pin_scenario.py:ro" \
             -v "$PWD/tests/identity/run-relay.sh:/run-signed-relay.sh:ro" \
             our-clipboard-signed-relay-tests bash /run-signed-relay.sh /pilot /helper

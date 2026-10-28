@@ -132,6 +132,34 @@ fn client_identity_survives_process_restarts() {
             .unwrap()
             .contains(&fingerprint)
     );
+    #[cfg(feature = "clipboard")]
+    {
+        let launch = config.path().join("launch.json");
+        let data = serde_json::json!({"version":1,"relay":"wss://relay.invalid/our-clipboard/v1","room":"1".repeat(64),"side":"a","identity_profile":profile,"peer_name":"remote","offer":"own.offer","peer_offer":"pending.offer","max_drift_ppm":1000,"clock_granularity_ms":1});
+        std::fs::write(&launch, data.to_string()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&launch, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let checked = Command::new(&executable)
+            .args(["pilot", "preflight", "--file", launch.to_str().unwrap()])
+            .env("OUR_CLIPBOARD_CONFIG_DIR", config.path())
+            .env("OUR_CLIPBOARD_RELAY_TOKEN", "a".repeat(64))
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .output()
+            .unwrap();
+        assert!(
+            checked.status.success(),
+            "Native local preflight failed (details omitted)"
+        );
+        let text = String::from_utf8(checked.stdout).unwrap();
+        assert!(text.contains("LOCAL PREFLIGHT PASSED") && text.contains(&fingerprint));
+        assert!(!config.path().join("own.offer").exists());
+        assert!(!config.path().join("pending.offer").exists());
+        assert_eq!(std::fs::read(&pin).unwrap(), original);
+    }
     assert_eq!(
         peer_call("trust", Some(&fingerprint)).status.code(),
         Some(2)

@@ -60,7 +60,7 @@ fn path_value(base: &Path, value: &str) -> std::result::Result<String, &'static 
         .map(str::to_owned)
         .ok_or("Resolved launch paths must be UTF-8.")
 }
-fn load(path: &Path) -> std::result::Result<Vec<String>, &'static str> {
+pub(super) fn load(path: &Path) -> std::result::Result<Vec<String>, &'static str> {
     let initial = std::fs::symlink_metadata(path).map_err(|_| "Launch file unavailable.")?;
     if !initial.file_type().is_file() {
         return Err("Launch configuration must be a regular file, not a symlink.");

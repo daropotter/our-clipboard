@@ -92,9 +92,11 @@ fn profile_lock(
     profile: &str,
     owner: &DeviceIdentity,
 ) -> Result<(File, PathBuf), PeerPinError> {
-    let (guard, pin) = storage::lock(root, profile).map_err(|e| {
+    let (guard, pin) = storage::lock_existing(root, profile).map_err(|e| {
         if e == IdentityError::Busy {
             PeerPinError::Busy
+        } else if e == IdentityError::Missing {
+            PeerPinError::Owner
         } else {
             PeerPinError::Configuration
         }

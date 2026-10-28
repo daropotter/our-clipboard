@@ -36,6 +36,11 @@ locked or corrupt identity storage fails without creating a replacement key or
 recovering public metadata. Profile names and peer names use 1–64 ASCII letters,
 digits, hyphens or underscores. Names are exact local labels, not remote claims.
 
+For a launch file, `pilot preflight --file FILE` can check the existing local
+identity and selected approval without publishing offers, contacting a relay or
+accessing the clipboard. It may access/unlock the OS credential service; it does
+not create missing metadata or certify current peer reachability/delivery.
+
 ## Storage and failure behavior
 
 The same configuration root as `identity init/show` is used, including an explicit

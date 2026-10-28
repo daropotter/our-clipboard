@@ -208,6 +208,8 @@ with tempfile.TemporaryDirectory() as directory:
                 checked = subprocess.run([binary, "pilot", "config-check", "--file", str(launch)],
                                          env=env, capture_output=True, timeout=5)
                 assert checked.returncode == 0 and b"No credentials" in checked.stdout, "Launch static validation failed"
+                from preflight_scenario import check as check_local_preflight
+                check_local_preflight(root, binary, env, settings, side, device_fingerprints)
                 # The fixture cwd is /tmp, not the configuration's temporary directory.
                 args = args[:args.index("pilot") + 1] + ["--config", str(launch), "--replace-clipboard"]
             clients[side] = spawn(args, env=dict(system_env.get(side, env), DISPLAY=display),
