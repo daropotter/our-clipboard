@@ -22,7 +22,8 @@ This is supervised testing. Relay pilots support an explicit local `--idle-file`
 Idle gate and a separate `--pause-file` session-ending action. Experimental
 session observation is opt-in: `--logind-idle` on Linux/X11 and
 `--macos-session-idle` on macOS. See the native-schema/locker/polling limits
-and physical-validation requirements in the guide.
+and physical-validation requirements in the guide. Both relay pilots can opt into
+`--reconnect` to recover the same live session without renewing text TTL.
 
 ## Direction
 

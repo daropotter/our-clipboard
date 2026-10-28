@@ -1,4 +1,5 @@
 //! Supervised two-machine pilot over pinned WSS or pretrusted SSH. No OS Idle hooks.
+mod link;
 use super::outbound::{self, AccessToken, PublicOffer, RelayIdentity, Room, Side};
 use super::peer_protocol::{self as wire, Kind, Protocol, PublicPeer, Settings, SigningPeer};
 use super::*;
@@ -8,6 +9,7 @@ use crate::{
     receipts::DeliveryTracker,
     session::ClipboardSession,
 };
+use link::{AttemptError, Link, Reconnector};
 use std::{
     fs::{File, OpenOptions},
     io::{BufRead, BufReader},
@@ -16,7 +18,7 @@ use std::{
 use std::{
     io::IsTerminal,
     process::{Child, Command, Stdio},
-    sync::mpsc::{self, SyncSender, TrySendError},
+    sync::{atomic::AtomicBool, mpsc},
 };
 // Bound network work per iteration so native observation/retries remain serviceable.
 const MAX_FRAMES_PER_TICK: usize = 8;
@@ -45,6 +47,7 @@ struct Options {
     pause_file: Option<String>,
     logind_idle: bool,
     macos_session_idle: bool,
+    reconnect: bool,
     seconds: u64,
     ttl: u32,
     drift: u32,
@@ -65,6 +68,7 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
         pause_file: None,
         logind_idle: false,
         macos_session_idle: false,
+        reconnect: false,
         seconds: 300,
         ttl: 30_000,
         drift: 0,
@@ -83,6 +87,10 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
         i += 1;
         if name == "--replace-clipboard" {
             consent = true;
+            continue;
+        }
+        if name == "--reconnect" {
+            o.reconnect = true;
             continue;
         }
         if name == "--macos-session-idle" {
@@ -210,6 +218,7 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
             || o.pause_file.is_some()
             || o.logind_idle
             || o.macos_session_idle
+            || o.reconnect
         {
             return Err("Relay options require --relay.");
         }
@@ -270,11 +279,10 @@ impl Drop for ChildGuard {
         let _ = self.0.wait();
     }
 }
-fn queue(sender: &SyncSender<(Kind, Vec<u8>)>, kind: Kind, bytes: Vec<u8>) -> Result<bool> {
-    match sender.try_send((kind, bytes)) {
-        Ok(()) => Ok(true),
-        Err(TrySendError::Full(_)) => Ok(false),
-        Err(TrySendError::Disconnected(_)) => Err(Error::Io),
+fn queue(link: &Option<Link>, kind: Kind, bytes: Vec<u8>) -> Result<bool> {
+    match link {
+        Some(link) => link.queue(kind, bytes),
+        None => Ok(false),
     }
 }
 struct Outgoing {
@@ -344,8 +352,10 @@ fn idle_requested(path: Option<&str>) -> Result<bool> {
 }
 fn session(
     input: impl Read + Send + 'static,
-    mut output: impl Write + Send + 'static,
+    output: impl Write + Send + 'static,
     o: &Options,
+    guard: Option<outbound::RelayLifetime>,
+    reconnect: Option<Arc<Reconnector>>,
 ) -> Result<()> {
     let role = if o.relay.is_some() {
         if o.side == Some(Side::A) { "a" } else { "b" }
@@ -356,38 +366,19 @@ fn session(
     };
     let signing = SigningPeer::new()?;
     let own = signing.public();
-    own.send(&mut output)?;
-    let (hello_tx, hello_rx) = mpsc::sync_channel(1);
-    let (incoming_tx, incoming) = mpsc::sync_channel(1);
-    thread::spawn(move || {
-        let mut input = input;
-        let peer = PublicPeer::receive(&mut input);
-        if hello_tx.send(peer).is_err() {
-            return;
-        }
-        loop {
-            let frame = wire::read_any(&mut input);
-            let stop = frame.is_err();
-            if incoming_tx.send(frame).is_err() || stop {
-                break;
-            }
-        }
-    });
-    let peer = hello_rx
-        .recv_timeout(Duration::from_secs(15))
-        .map_err(|_| Error::Setup)??;
+    let (initial, peer) = Link::open(input, output, own, None, guard, None)?;
+    let mut link = Some(initial);
     let mut protocol = Protocol::with_settings(signing, peer, settings(own, peer, o)?)?;
-    let (writer, write_rx) = mpsc::sync_channel::<(Kind, Vec<u8>)>(1);
-    thread::spawn(move || {
-        while let Ok((kind, bytes)) = write_rx.recv() {
-            if wire::send(&mut output, kind, &bytes).is_err() {
-                break;
-            }
-        }
-    });
+    let mut attempt: Option<mpsc::Receiver<std::result::Result<Link, AttemptError>>> = None;
+    let mut failures = 0u32;
+    let mut next_attempt = 0u64;
+    let mut calibrated = false;
+    let mut resumed = false;
+    let mut announced_resume = false;
     let started = wire::now()?;
     let end = started + o.seconds * 1000;
     let mut next_probe = started;
+    let mut last_verified_clock = started;
     let mut pending_probe: Option<(ClockProbe, u64)> = None;
     let mut estimate: Option<ClockEstimate> = None;
     let mut peer_ready = false;
@@ -415,6 +406,70 @@ fn session(
                 "[{role}] PAUSED: session ended and pending text discarded; restart with fresh offers."
             );
             return Ok(());
+        }
+        if o.reconnect
+            && link::clock_stalled(now, last_verified_clock)
+            && let Some(link) = &link
+        {
+            link.disconnected();
+        }
+        if let Some(error) = link.as_ref().and_then(Link::failure) {
+            if error != Error::Io {
+                return Err(error);
+            }
+            link = None;
+            if reconnect.is_none() {
+                eprintln!("[{role}] Pilot peer disconnected; session ended, no replay on restart.");
+                return Ok(());
+            }
+            pending_probe = None;
+            sent_ready = false;
+            peer_ready = false;
+            calibrated = false;
+            next_probe = now;
+            next_attempt = now + link::delay_ms(0, 0);
+            failures = 0;
+            eprintln!(
+                "[{role}] DISCONNECTED: retaining the existing session; original TTL keeps running."
+            );
+        }
+        if link.is_none()
+            && let Some(config) = &reconnect
+        {
+            if let Some(receiver) = &attempt {
+                match receiver.try_recv() {
+                    Ok(Ok(next)) => {
+                        link = Some(next);
+                        attempt = None;
+                        pending_probe = None;
+                        next_probe = now;
+                        sent_ready = false;
+                        peer_ready = false;
+                        calibrated = false;
+                        last_verified_clock = now;
+                        resumed = true;
+                        announced_resume = false;
+                        failures = 0;
+                        eprintln!(
+                            "[{role}] Transport restored; recalibrating the existing authenticated session."
+                        );
+                    }
+                    Ok(Err(AttemptError::Terminal(error))) => return Err(error),
+                    Ok(Err(AttemptError::Retry)) | Err(mpsc::TryRecvError::Disconnected) => {
+                        attempt = None;
+                        let mut jitter = [0];
+                        getrandom::fill(&mut jitter).map_err(|_| Error::Setup)?;
+                        next_attempt = now + link::delay_ms(failures, jitter[0]);
+                        failures = failures.saturating_add(1);
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+            }
+            if link.is_none() && attempt.is_none() && now >= next_attempt {
+                eprintln!("[{role}] RECONNECTING: checking the pinned peer on a new transport.");
+                attempt =
+                    Some(config.spawn(own, peer, Duration::from_millis(end.saturating_sub(now))));
+            }
         }
         let marker_idle = idle_requested(o.idle_file.as_deref()).inspect_err(|_| {
             eprintln!(
@@ -467,16 +522,23 @@ fn session(
         }
         // Reader/writer queues each hold one bounded frame; backpressure never blocks the event loop.
         for _ in 0..MAX_FRAMES_PER_TICK {
-            match incoming.try_recv() {
+            let Some(current) = &link else {
+                break;
+            };
+            match current.incoming.try_recv() {
                 Ok(Ok((kind, bytes))) => match kind {
                     Kind::Request => {
                         let reply = protocol.clock_reply(&bytes)?;
-                        queue(&writer, Kind::Reply, reply)?;
+                        queue(&link, Kind::Reply, reply)?;
                     }
                     Kind::Reply => {
                         if let Some((probe, _)) = pending_probe.take() {
                             match protocol.finish_probe(probe, &bytes) {
-                                Ok(e) => estimate = Some(e),
+                                Ok(e) => {
+                                    estimate = Some(e);
+                                    calibrated = true;
+                                    last_verified_clock = wire::now()?;
+                                }
                                 Err(_) => eprintln!(
                                     "[{role}] Pilot clock sample rejected; no unsafe age fallback."
                                 ),
@@ -510,7 +572,7 @@ fn session(
                                     | DeliveryDecision::AlreadyApplied { .. }),
                                 ) => {
                                     queue(
-                                        &writer,
+                                        &link,
                                         Kind::Applied,
                                         protocol.receipt_bytes(&event, d)?,
                                     )?;
@@ -542,11 +604,10 @@ fn session(
                     Kind::Retry | Kind::Rejected => return Err(Error::Frame),
                 },
                 Ok(Err(Error::Frame)) => return Err(Error::Frame),
+                Ok(Err(Error::Authentication)) => return Err(Error::Authentication),
                 Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
-                    eprintln!(
-                        "[{role}] Pilot peer disconnected; session ended, no replay on restart."
-                    );
-                    return Ok(());
+                    current.disconnected();
+                    break;
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
             }
@@ -558,17 +619,22 @@ fn session(
             pending_probe = None;
             next_probe = now;
         }
-        if now >= next_probe && pending_probe.is_none() {
+        if link.is_some() && now >= next_probe && pending_probe.is_none() {
             let probe = protocol.start_probe()?;
-            if queue(&writer, Kind::Request, probe.request().to_wire())? {
+            if queue(&link, Kind::Request, probe.request().to_wire())? {
                 pending_probe = Some((probe, now));
                 next_probe = now + PROBE_INTERVAL_MS;
             }
         }
-        if !sent_ready && estimate.is_some() && protocol.ready()? {
-            sent_ready = queue(&writer, Kind::Ready, vec![1])?;
+        if !sent_ready && calibrated && protocol.ready()? {
+            sent_ready = queue(&link, Kind::Ready, vec![1])?;
         }
-        if !idle && clipboard.is_none() && sent_ready && peer_ready {
+        let transport_ready = link.is_some() && calibrated && sent_ready && peer_ready;
+        if resumed && transport_ready && !announced_resume {
+            eprintln!("[{role}] RECONNECTED: existing session ready; original TTL unchanged.");
+            announced_resume = true;
+        }
+        if !idle && clipboard.is_none() && transport_ready {
             clipboard = Some(ClipboardSession::new().map_err(|_| Error::Worker)?);
             eprintln!(
                 "[{role}] READY: copy new text now. Pilot changes the peer clipboard; contents are never logged."
@@ -602,7 +668,8 @@ fn session(
                 });
             }
             if now >= next_retry {
-                if let Some(estimate) = &estimate
+                if transport_ready
+                    && let Some(estimate) = &estimate
                     && let Some((event, decision)) =
                         protocol.retry(estimate, session).inspect_err(|_e| {
                             eprintln!("[{role}] Pending-event maintenance failed.");
@@ -613,22 +680,33 @@ fn session(
                     )
                 {
                     queue(
-                        &writer,
+                        &link,
                         Kind::Applied,
                         protocol.receipt_bytes(&event, decision)?,
                     )?;
                     eprintln!("[{role}] Applied pending peer event.");
+                }
+                if !transport_ready && let Some(estimate) = &estimate {
+                    protocol.maintain_disconnected(estimate)?;
                 }
                 next_retry = now + APPLY_RETRY_INTERVAL_MS;
             }
         } else {
             if idle && now >= next_retry {
                 if let Some(estimate) = &estimate {
-                    protocol.maintain_idle(estimate)?;
+                    if o.reconnect && !transport_ready {
+                        protocol.maintain_disconnected(estimate)?;
+                    } else {
+                        protocol.maintain_idle(estimate)?;
+                    }
                 }
                 next_retry = now + APPLY_RETRY_INTERVAL_MS;
             }
             thread::sleep(Duration::from_millis(5));
+        }
+        let now = wire::now()?;
+        if now >= end {
+            break;
         }
         if outgoing.as_ref().is_some_and(|out| {
             now.saturating_sub(out.event.context().created_boot_ms) >= u64::from(o.ttl)
@@ -636,12 +714,13 @@ fn session(
             outgoing = None;
             eprintln!("[{role}] Latest local event expired without a confirmed peer application.");
         }
-        if let Some(out) = &mut outgoing
+        if transport_ready
+            && let Some(out) = &mut outgoing
             && now >= out.send_after
             && out
                 .last_sent
                 .is_none_or(|last| now.saturating_sub(last) >= SEND_RETRY_INTERVAL_MS)
-            && queue(&writer, Kind::Event, out.event.to_wire())?
+            && queue(&link, Kind::Event, out.event.to_wire())?
         {
             out.last_sent = Some(now);
         }
@@ -743,19 +822,26 @@ fn relay_pilot(o: &Options) -> std::result::Result<(), &'static str> {
         &mut BufReader::new(std::io::stdin().lock()),
         &peer.fingerprint(),
     )?;
-    let (reader, writer, _lifetime) = outbound::connect(
-        &identity,
-        outbound::RelayOptions {
-            url: o.relay.as_ref().unwrap(),
-            room: o.room.unwrap(),
-            side: o.side.unwrap(),
-            token: &token,
-            peer: &peer,
-            outer,
-        },
+    let config = Arc::new(Reconnector {
+        identity,
+        peer,
+        url: o.relay.as_ref().unwrap().clone(),
+        room: o.room.unwrap(),
+        side: o.side.unwrap(),
+        token,
+        outer,
+        cancel: Arc::new(AtomicBool::new(false)),
+    });
+    let _cancel = config.cancel_on_drop();
+    let (reader, writer, guard) = config.initial().map_err(|e| e.message())?;
+    session(
+        reader,
+        writer,
+        o,
+        Some(guard),
+        o.reconnect.then_some(config),
     )
-    .map_err(|e| e.message())?;
-    session(reader, writer, o).map_err(relay_session_error)
+    .map_err(relay_session_error)
 }
 // clipboard-rs emits unstructured stdout diagnostics on X11 ownership changes.
 // A pilot exclusively owns this process: preserve its binary output pipe, then
@@ -779,7 +865,7 @@ fn protocol_stdout() -> std::result::Result<std::fs::File, &'static str> {
 }
 pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
     if matches!(args,[arg] if arg=="--help"||arg=="-h") {
-        return Ok("Usage: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nRelay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. Optional --macos-session-idle observes the macOS caller/console state (experimental registry schema; unknown/stale means Idle). Optional --logind-idle observes the Linux/X11 logind session (unknown/stale means Idle). Optional --idle-file FILE pauses while the marker exists; metadata errors stop the pilot. This injects Idle state, not automatic screen-lock detection. Optional --pause-file FILE ends the session and discards pending text when present; resuming requires fresh pilots/offers. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
+        return Ok("Usage: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nOptional --reconnect retries transport loss within the same live authenticated session, without renewing TTL. Relay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. Optional --macos-session-idle observes the macOS caller/console state (experimental registry schema; unknown/stale means Idle). Optional --logind-idle observes the Linux/X11 logind session (unknown/stale means Idle). Optional --idle-file FILE pauses while the marker exists; metadata errors stop the pilot. This injects Idle state, not automatic screen-lock detection. Optional --pause-file FILE ends the session and discards pending text when present; resuming requires fresh pilots/offers. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
     }
     let o = options(args)?;
     #[cfg(not(target_os = "macos"))]
@@ -818,13 +904,13 @@ pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
         return Ok(String::new());
     }
     let result = if o.stdio {
-        session(std::io::stdin(), output, &o)
+        session(std::io::stdin(), output, &o, None, None)
     } else {
         drop(output);
         let mut child = ChildGuard(ssh(&o)?);
         let input = child.0.stdout.take().ok_or("SSH output unavailable.")?;
         let output = child.0.stdin.take().ok_or("SSH input unavailable.")?;
-        session(input, output, &o)
+        session(input, output, &o, None, None)
     };
     result.map_err(|_|"Pilot stopped: transport, clock or clipboard operation failed; content and keys are omitted.")?;
     Ok(String::new())
