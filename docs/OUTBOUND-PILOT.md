@@ -146,9 +146,12 @@ the public offer, application session and TLS key deliberately change. Comparing
 only a self-signed file does not establish trust: use an independent trusted
 channel, and investigate a changed device fingerprint before continuing.
 
-Every run still requires explicit confirmation and fresh offers. Successful
-confirmation does not save peer trust, create group membership, grant invitation
-rights or implement the final six-digit pairing-code protocol. Initial new-session
+Fresh offers are required on every run. Independent fingerprint confirmation
+remains the default. To explicitly save prior approval and select it with
+`--peer-name NAME`, follow the [local peer-trust guide](PEER-TRUST.md). Missing,
+corrupt or changed trust stops instead of prompting to replace it. Confirmation
+alone does not save peer trust, create group membership, grant invitation rights
+or implement the final six-digit pairing-code protocol. Initial new-session
 quiet periods and original-TTL/Idle/Pause/ACK rules are unchanged. `--reconnect`
 can be combined with signed offers; it resumes only the same live session, not a
 process that restarted. Pause/restart still requires fresh processes and offers.

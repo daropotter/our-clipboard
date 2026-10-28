@@ -14,8 +14,12 @@ import time
 binary, helper = sys.argv[1:3]
 logind_fixture = sys.argv[3] if len(sys.argv) > 3 else None
 reconnect_mode = os.environ.get("OUR_CLIPBOARD_TEST_RECONNECT", "")
+named_peers = os.environ.get("OUR_CLIPBOARD_TEST_NAMED_PEERS") == "1"
+enroll_peers = os.environ.get("OUR_CLIPBOARD_TEST_ENROLL_PEERS") == "1"
 signed_offers = os.environ.get("OUR_CLIPBOARD_TEST_SIGNED_OFFERS") == "1"
 external = os.environ.get("OUR_CLIPBOARD_EXTERNAL_RELAY") == "1"
+if (named_peers or enroll_peers) and not signed_offers:
+    raise SystemExit("Named peer fixture requires signed offers")
 if signed_offers and external:
     raise SystemExit("Signed-offer fixtures require a private disposable keyring and relay")
 relay_port = 8443 if external else 443
@@ -179,6 +183,8 @@ with tempfile.TemporaryDirectory() as directory:
                     "--clock-granularity-ms", "1"]
             if signed_offers:
                 args.extend(["--identity-profile", "pilot-" + side])
+            if named_peers:
+                args.extend(["--peer-name", "remote"])
             if reconnect_mode:
                 args.append("--reconnect")
             if logind_fixture:
@@ -196,8 +202,10 @@ with tempfile.TemporaryDirectory() as directory:
                 assert fingerprint == device_fingerprints[peer], "Pilot did not reload its initialized device key"
             else:
                 fingerprint = "sha256:" + hashlib.sha256(data).hexdigest()
-            clients[side].stdin.write((fingerprint + "\n").encode())
-            clients[side].stdin.flush()
+            if not named_peers:
+                clients[side].stdin.write((fingerprint + "\n").encode())
+                clients[side].stdin.flush()
+            # EOF in named mode proves it never falls back to an interactive prompt.
             clients[side].stdin.close()
         wait_for(lambda: "IDLE:" in status(root / "a.log") and "READY:" in status(root / "b.log"),
                  40 if reconnect_mode == "stale" else 10)
@@ -310,6 +318,16 @@ with tempfile.TemporaryDirectory() as directory:
             trace = (root / "downgrade.trace").read_text()
             assert all("AF_UNIX" in line for line in trace.splitlines() if "connect(" in line), "Downgrade reached relay"
             assert "listen(" not in trace, "Downgrade rejection opened a listener"
+        if enroll_peers:
+            from peer_pin_scenario import enroll
+            enroll(root, binary, env, room, device_fingerprints)
+        if named_peers:
+            for side in clients:
+                assert "SAVED PEER VERIFIED:" in status(root / f"{side}.log"), "No explicit pin verification"
+                assert "then type that full fingerprint" not in status(root / f"{side}.log"), "Named peer prompted"
+            from peer_pin_scenario import reject_changed_or_unusable_trust
+            reject_changed_or_unusable_trust(root, binary, env, room, bad_args,
+                                            spawn, status, wait_for, offer_ready)
         logs = status(root / "a.log") + status(root / "b.log")
         assert logs.count("Applied peer event.") == expected_apps, "Unexpected repeated application/echo"
         assert logs.count("Applied pending peer event.") == expected_pending, "Buffered value was not applied exactly once"
