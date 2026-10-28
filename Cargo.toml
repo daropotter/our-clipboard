@@ -27,7 +27,7 @@ webpki-roots = "1"
 zeroize = "1"
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.5", features = ["stdio"] }
+rustix = { version = "1.1.5", features = ["stdio", "process"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 clipboard-rs = { version = "0.3.5", default-features = false, optional = true }

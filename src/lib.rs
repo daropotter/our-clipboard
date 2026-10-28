@@ -7,6 +7,8 @@ mod gnome;
 pub mod identity;
 #[cfg(all(feature = "clipboard", target_os = "linux"))]
 mod logind;
+#[cfg(all(feature = "clipboard", any(target_os = "macos", test)))]
+mod macos_session;
 #[cfg(feature = "clipboard")]
 mod origin;
 pub mod receipts;

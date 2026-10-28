@@ -19,9 +19,10 @@ fingerprint confirmations are required. Signed events, original TTL and receiver
 ACKs remain active. Wait for both READY statuses before copying.
 The optional [SSH pilot](docs/PILOT.md) is available only where policy allows it.
 This is supervised testing. Relay pilots support an explicit local `--idle-file`
-Idle gate and a separate `--pause-file` session-ending action; automatic
-macOS lock integration is pending. Linux/X11 can opt into experimental
-`--logind-idle` session observation; see its locker/polling limits in the guide.
+Idle gate and a separate `--pause-file` session-ending action. Experimental
+session observation is opt-in: `--logind-idle` on Linux/X11 and
+`--macos-session-idle` on macOS. See the native-schema/locker/polling limits
+and physical-validation requirements in the guide.
 
 ## Direction
 
