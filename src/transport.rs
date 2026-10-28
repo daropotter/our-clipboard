@@ -96,16 +96,19 @@ fn client_config(
 }
 
 fn io_error(error: std::io::Error) -> Error {
-    if let Some(rustls::Error::InvalidCertificate(_) | rustls::Error::NoCertificatesPresented) =
-        error
-            .get_ref()
-            .and_then(|e| e.downcast_ref::<rustls::Error>())
+    if error
+        .get_ref()
+        .and_then(|e| e.downcast_ref::<rustls::Error>())
+        .is_some()
     {
         Error::Authentication
+    } else if error.kind() == std::io::ErrorKind::InvalidData {
+        Error::Frame
     } else {
         Error::Io
     }
 }
+
 fn send_text(stream: &mut impl Write, text: &str) -> Result<()> {
     crate::text::validate(text).map_err(|_| Error::Frame)?;
     stream.write_all(MAGIC).map_err(io_error)?;

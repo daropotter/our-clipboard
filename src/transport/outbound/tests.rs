@@ -326,3 +326,271 @@ fn preflight_checks_outer_trust_without_reserving_a_room() {
     let (left, right) = relay.pair(false);
     assert!(left.is_ok() && right.is_ok());
 }
+
+#[test]
+fn continuing_setup_observes_cancellation_and_deadline_without_weakening_pins() {
+    let h = Harness::new();
+    let a = RelayIdentity::generate().unwrap();
+    let b = RelayIdentity::generate().unwrap();
+    let bp = b.public_offer();
+    for cancelled in [true, false] {
+        let c = SetupControl {
+            until: if cancelled {
+                Instant::now() + Duration::from_secs(1)
+            } else {
+                Instant::now() - Duration::from_secs(1)
+            },
+            cancel: Arc::new(AtomicBool::new(cancelled)),
+            finished: Arc::new(AtomicBool::new(false)),
+        };
+        let result = connect_controlled(
+            &a,
+            RelayOptions {
+                url: &h.url,
+                room: Room([2; 32]),
+                side: Side::A,
+                token: &h.token,
+                peer: &bp,
+                outer: h.outer.clone(),
+            },
+            Some(&c),
+        );
+        assert!(matches!(
+            result,
+            Err(RelayError::Transport | RelayError::Timeout)
+        ));
+    }
+    let (left, right) = h.pair(false);
+    assert!(left.is_ok() && right.is_ok());
+}
+#[test]
+fn transport_loss_is_retryable_but_malformed_records_remain_terminal() {
+    assert_eq!(
+        peer_setup_error(io::ErrorKind::UnexpectedEof.into()),
+        RelayError::Transport
+    );
+    assert_eq!(
+        peer_setup_error(io::ErrorKind::TimedOut.into()),
+        RelayError::Timeout
+    );
+    assert_eq!(
+        peer_setup_error(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Malformed peer data"
+        )),
+        RelayError::PeerAuthentication
+    );
+    assert_eq!(
+        super::super::io_error(ws_error(tungstenite::Error::Protocol(
+            tungstenite::error::ProtocolError::ResetWithoutClosingHandshake
+        ))),
+        Error::Io
+    );
+    assert_eq!(
+        super::super::io_error(ws_error(tungstenite::Error::Capacity(
+            tungstenite::error::CapacityError::TooManyHeaders
+        ))),
+        Error::Frame
+    );
+}
+
+#[test]
+fn controlled_pairing_finishes_setup_without_expiring_the_live_stream() {
+    let h = Harness::new();
+    let a = RelayIdentity::generate().unwrap();
+    let b = RelayIdentity::generate().unwrap();
+    let ap = a.public_offer();
+    let bp = b.public_offer();
+    let control = Arc::new(SetupControl {
+        until: Instant::now() + Duration::from_secs(1),
+        cancel: Arc::new(AtomicBool::new(false)),
+        finished: Arc::new(AtomicBool::new(false)),
+    });
+    let (url, token, outer, c) = (
+        h.url.clone(),
+        h.token.clone(),
+        h.outer.clone(),
+        control.clone(),
+    );
+    let left = thread::spawn(move || {
+        connect_controlled(
+            &a,
+            RelayOptions {
+                url: &url,
+                room: Room([6; 32]),
+                side: Side::A,
+                token: &token,
+                peer: &bp,
+                outer,
+            },
+            Some(&c),
+        )
+    });
+    let right = connect_controlled(
+        &b,
+        RelayOptions {
+            url: &h.url,
+            room: Room([6; 32]),
+            side: Side::B,
+            token: &h.token,
+            peer: &ap,
+            outer: h.outer.clone(),
+        },
+        Some(&control),
+    );
+    let (_, mut writer, _left_guard) = left.join().unwrap().unwrap();
+    let (mut reader, _, _right_guard) = right.unwrap();
+    control.finished.store(true, Ordering::Relaxed);
+    thread::sleep(
+        control.until.saturating_duration_since(Instant::now()) + Duration::from_millis(20),
+    );
+    writer.write_all(b"after-setup").unwrap();
+    writer.flush().unwrap();
+    let mut bytes = [0; 11];
+    reader.read_exact(&mut bytes).unwrap();
+    assert_eq!(&bytes, b"after-setup");
+}
+
+#[test]
+fn controlled_missing_peer_times_out_without_blocking_for_the_normal_join_limit() {
+    let h = Harness::new();
+    let a = RelayIdentity::generate().unwrap();
+    let b = RelayIdentity::generate().unwrap();
+    let control = SetupControl {
+        until: Instant::now() + Duration::from_millis(100),
+        cancel: Arc::new(AtomicBool::new(false)),
+        finished: Arc::new(AtomicBool::new(false)),
+    };
+    let start = Instant::now();
+    let result = connect_controlled(
+        &a,
+        RelayOptions {
+            url: &h.url,
+            room: Room([8; 32]),
+            side: Side::A,
+            token: &h.token,
+            peer: &b.public_offer(),
+            outer: h.outer.clone(),
+        },
+        Some(&control),
+    );
+    assert!(matches!(result, Err(RelayError::Timeout)));
+    assert!(start.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+fn controlled_application_hello_read_expires_when_peer_withholds_hello() {
+    let h = Harness::new();
+    let a = RelayIdentity::generate().unwrap();
+    let b = RelayIdentity::generate().unwrap();
+    let ap = a.public_offer();
+    let bp = b.public_offer();
+    let control = Arc::new(SetupControl {
+        until: Instant::now() + Duration::from_secs(1),
+        cancel: Arc::new(AtomicBool::new(false)),
+        finished: Arc::new(AtomicBool::new(false)),
+    });
+    let (url, token, outer, c) = (
+        h.url.clone(),
+        h.token.clone(),
+        h.outer.clone(),
+        control.clone(),
+    );
+    let left = thread::spawn(move || {
+        connect_controlled(
+            &a,
+            RelayOptions {
+                url: &url,
+                room: Room([6; 32]),
+                side: Side::A,
+                token: &token,
+                peer: &bp,
+                outer,
+            },
+            Some(&c),
+        )
+    });
+    let right = connect_controlled(
+        &b,
+        RelayOptions {
+            url: &h.url,
+            room: Room([6; 32]),
+            side: Side::B,
+            token: &h.token,
+            peer: &ap,
+            outer: h.outer.clone(),
+        },
+        Some(&control),
+    );
+    let (_, _, _left_guard) = left.join().unwrap().unwrap();
+    let (mut reader, _, right_guard) = right.unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let started = Instant::now();
+    thread::spawn(move || {
+        let mut hello = [0; 1];
+        tx.send(reader.read_exact(&mut hello).map_err(|e| e.kind()))
+            .unwrap();
+    });
+    let result = rx.recv_timeout(Duration::from_secs(2));
+    drop(right_guard); // Also unblock a regressed implementation before failing.
+    assert_eq!(result.unwrap(), Err(io::ErrorKind::ConnectionAborted));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(!control.finished.load(Ordering::Relaxed));
+}
+
+#[test]
+fn cancelling_blocked_wss_setup_io_returns_promptly() {
+    let h = Harness::new();
+    let control = SetupControl {
+        until: Instant::now() + Duration::from_secs(10),
+        cancel: Arc::new(AtomicBool::new(false)),
+        finished: Arc::new(AtomicBool::new(false)),
+    };
+    let cancel = control.cancel.clone();
+    // Wait for a TCP connection before cancelling, so preflight checks cannot
+    // satisfy this test without exercising Network I/O cancellation.
+    let (ws, guard) =
+        open_wss_controlled(&h.url, &h.token, h.outer.clone(), Some(&control)).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut ws = ws;
+        tx.send(ws.read(&mut [0; 1]).map(|_| ()).map_err(|e| e.kind()))
+            .unwrap();
+    });
+    thread::sleep(Duration::from_millis(100));
+    assert!(matches!(
+        rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    let start = Instant::now();
+    cancel.store(true, Ordering::Relaxed);
+    let result = rx.recv_timeout(Duration::from_secs(2));
+    drop(guard);
+    assert_eq!(result.unwrap(), Err(io::ErrorKind::ConnectionAborted));
+    assert!(start.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+fn controlled_outer_tls_deadline_is_a_timeout_not_an_auth_or_transport_failure() {
+    let h = Harness::new();
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let worker = thread::spawn(move || {
+        let (_socket, _) = listener.accept().unwrap();
+        // Accept TCP but withhold the outer TLS handshake past the setup budget.
+        thread::sleep(Duration::from_millis(300));
+    });
+    let control = SetupControl {
+        until: Instant::now() + Duration::from_millis(100),
+        cancel: Arc::new(AtomicBool::new(false)),
+        finished: Arc::new(AtomicBool::new(false)),
+    };
+    let result = open_wss_controlled(
+        &format!("wss://127.0.0.1:{}{PATH}", address.port()),
+        &h.token,
+        h.outer.clone(),
+        Some(&control),
+    );
+    assert!(matches!(result, Err(RelayError::Timeout)));
+    worker.join().unwrap();
+}

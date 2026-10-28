@@ -154,6 +154,8 @@ struct Network {
     socket: TcpStream,
     deadline: Option<Instant>,
     poll: bool,
+    cancel: Option<Arc<AtomicBool>>,
+    setup_finished: Option<Arc<AtomicBool>>,
 }
 impl Network {
     fn new(socket: TcpStream) -> io::Result<Self> {
@@ -163,11 +165,44 @@ impl Network {
             socket,
             deadline: Some(Instant::now() + SETUP_TIMEOUT),
             poll: false,
+            cancel: None,
+            setup_finished: None,
         })
     }
     fn paired(&mut self) {
         self.poll = true;
         self.deadline = None;
+        self.cancel = None;
+        self.setup_finished = None;
+    }
+    fn setup_done(&self) -> bool {
+        self.setup_finished
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::Relaxed))
+    }
+    fn effective_deadline(&self) -> Option<Instant> {
+        if self.setup_done() {
+            None
+        } else {
+            self.deadline
+        }
+    }
+    fn check_cancel(&self) -> io::Result<()> {
+        if self.setup_done() {
+            return Ok(());
+        }
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(|c| c.load(Ordering::Relaxed))
+            || (self.setup_finished.is_some() && self.deadline.is_some_and(|d| Instant::now() >= d))
+        {
+            // A controlled setup deadline is terminal. TimedOut is reserved for
+            // retryable socket polling in ByteStream/RelayReader.
+            Err(io::ErrorKind::ConnectionAborted.into())
+        } else {
+            Ok(())
+        }
     }
     fn check(until: Instant) -> io::Result<()> {
         if Instant::now() >= until {
@@ -180,7 +215,8 @@ impl Network {
 impl Read for Network {
     fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
         loop {
-            if let Some(d) = self.deadline {
+            self.check_cancel()?;
+            if let Some(d) = self.effective_deadline() {
                 Self::check(d)?;
             }
             match self.socket.read(b) {
@@ -195,9 +231,10 @@ impl Read for Network {
 impl Write for Network {
     fn write(&mut self, b: &[u8]) -> io::Result<usize> {
         let until = self
-            .deadline
+            .effective_deadline()
             .unwrap_or_else(|| Instant::now() + Duration::from_secs(5));
         loop {
+            self.check_cancel()?;
             Self::check(until)?;
             match self.socket.write(b) {
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -222,9 +259,46 @@ fn ws_config() -> WebSocketConfig {
 fn retryable(e: &tungstenite::Error) -> bool {
     matches!(e,tungstenite::Error::Io(e)if matches!(e.kind(),io::ErrorKind::WouldBlock|io::ErrorKind::TimedOut))
 }
-fn ws_error(_: tungstenite::Error) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "Encrypted relay stream failed")
+fn ws_error(error: tungstenite::Error) -> io::Error {
+    match error {
+        tungstenite::Error::Io(error) => error,
+        tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => {
+            io::ErrorKind::BrokenPipe.into()
+        }
+        tungstenite::Error::Protocol(
+            tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
+        ) => io::ErrorKind::ConnectionReset.into(),
+        _ => io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Encrypted relay protocol failed",
+        ),
+    }
 }
+fn peer_setup_error(error: io::Error) -> RelayError {
+    if error
+        .get_ref()
+        .and_then(|e| e.downcast_ref::<rustls::Error>())
+        .is_some()
+    {
+        return RelayError::PeerAuthentication;
+    }
+    match error.kind() {
+        io::ErrorKind::TimedOut => RelayError::Timeout,
+        io::ErrorKind::UnexpectedEof
+        | io::ErrorKind::ConnectionReset
+        | io::ErrorKind::BrokenPipe
+        | io::ErrorKind::ConnectionAborted
+        | io::ErrorKind::NotConnected => RelayError::Transport,
+        _ => RelayError::PeerAuthentication,
+    }
+}
+/// Bounded, cancellable setup for a continuing pilot; not a retry/auth policy.
+pub(crate) struct SetupControl {
+    pub until: Instant,
+    pub cancel: Arc<AtomicBool>,
+    pub finished: Arc<AtomicBool>,
+}
+
 type ClientWs = WebSocket<MaybeTlsStream<Network>>;
 struct ByteStream {
     ws: ClientWs,
@@ -403,6 +477,14 @@ fn open_wss(
     token: &AccessToken,
     outer: Arc<ClientConfig>,
 ) -> R<(ByteStream, RelayLifetime)> {
+    open_wss_controlled(url, token, outer, None)
+}
+fn open_wss_controlled(
+    url: &str,
+    token: &AccessToken,
+    outer: Arc<ClientConfig>,
+    control: Option<&SetupControl>,
+) -> R<(ByteStream, RelayLifetime)> {
     use std::net::ToSocketAddrs;
     use tungstenite::client::IntoClientRequest;
     let mut request = url
@@ -424,13 +506,23 @@ fn open_wss(
     let addresses = (host.as_str(), port)
         .to_socket_addrs()
         .map_err(|_| RelayError::Transport)?;
-    let until = Instant::now() + SETUP_TIMEOUT;
+    let until = control.map_or(Instant::now() + SETUP_TIMEOUT, |c| {
+        c.until.min(Instant::now() + SETUP_TIMEOUT)
+    });
     let mut socket = None;
     for addr in addresses.take(8) {
+        if control.is_some_and(|c| c.cancel.load(Ordering::Relaxed)) {
+            return Err(RelayError::Transport);
+        }
         let remaining = until
             .checked_duration_since(Instant::now())
             .ok_or(RelayError::Timeout)?;
-        if let Ok(s) = TcpStream::connect_timeout(&addr, remaining) {
+        let wait = if control.is_some() {
+            remaining.min(Duration::from_millis(200))
+        } else {
+            remaining
+        };
+        if let Ok(s) = TcpStream::connect_timeout(&addr, wait) {
             socket = Some(s);
             break;
         }
@@ -442,13 +534,39 @@ fn open_wss(
         tungstenite::http::HeaderValue::from_bytes(&token.header())
             .map_err(|_| RelayError::Configuration)?,
     );
+    let mut net = Network::new(socket).map_err(|_| RelayError::Transport)?;
+    if let Some(c) = control {
+        net.cancel = Some(c.cancel.clone());
+        net.setup_finished = Some(c.finished.clone());
+        net.deadline = Some(until);
+    }
     let (ws, _) = tungstenite::client_tls_with_config(
         request,
-        Network::new(socket).map_err(|_| RelayError::Transport)?,
+        net,
         Some(ws_config()),
         Some(tungstenite::Connector::Rustls(outer)),
     )
-    .map_err(|_| RelayError::Authentication)?;
+    .map_err(|error| match error {
+        tungstenite::HandshakeError::Failure(tungstenite::Error::Io(e))
+            if e.get_ref()
+                .and_then(|e| e.downcast_ref::<rustls::Error>())
+                .is_none() =>
+        {
+            if e.kind() == io::ErrorKind::TimedOut
+                || control.is_some_and(|_| Instant::now() >= until)
+            {
+                RelayError::Timeout
+            } else {
+                RelayError::Transport
+            }
+        }
+        tungstenite::HandshakeError::Failure(tungstenite::Error::Http(response))
+            if matches!(response.status().as_u16(), 429 | 503) =>
+        {
+            RelayError::Capacity
+        }
+        _ => RelayError::Authentication,
+    })?;
     Ok((
         ByteStream {
             ws,
@@ -476,6 +594,13 @@ pub struct RelayOptions<'a> {
     pub outer: Arc<ClientConfig>,
 }
 pub fn connect(identity: &RelayIdentity, options: RelayOptions<'_>) -> R<RelayParts> {
+    connect_controlled(identity, options, None)
+}
+pub(crate) fn connect_controlled(
+    identity: &RelayIdentity,
+    options: RelayOptions<'_>,
+    control: Option<&SetupControl>,
+) -> R<RelayParts> {
     let RelayOptions {
         url,
         room,
@@ -484,16 +609,33 @@ pub fn connect(identity: &RelayIdentity, options: RelayOptions<'_>) -> R<RelayPa
         peer,
         outer,
     } = options;
-    let (mut stream, guard) = open_wss(url, token, outer)?;
+    let (mut stream, guard) = open_wss_controlled(url, token, outer, control)?;
+    // The outer setup cap can be earlier than the controller's total budget.
+    let setup_until = match stream.ws.get_ref() {
+        MaybeTlsStream::Rustls(s) => s.sock.effective_deadline(),
+        _ => None,
+    };
     let mut join = b"OCRJ\x01".to_vec();
     join.extend(room.0);
     join.push(side.byte());
     stream
         .ws
         .send(Message::Binary(join.into()))
-        .map_err(|_| RelayError::Transport)?;
+        .map_err(|error| {
+            if matches!(error, tungstenite::Error::Io(_))
+                && setup_until.is_some_and(|until| Instant::now() >= until)
+            {
+                RelayError::Timeout
+            } else {
+                RelayError::Transport
+            }
+        })?;
     match stream.ws.get_mut() {
-        MaybeTlsStream::Rustls(s) => s.sock.deadline = Some(Instant::now() + PAIR_TIMEOUT),
+        MaybeTlsStream::Rustls(s) => {
+            s.sock.deadline = Some(control.map_or(Instant::now() + PAIR_TIMEOUT, |c| {
+                c.until.min(Instant::now() + PAIR_TIMEOUT)
+            }))
+        }
         _ => return Err(RelayError::Configuration),
     }
     let mut secure = match side {
@@ -507,8 +649,21 @@ pub fn connect(identity: &RelayIdentity, options: RelayOptions<'_>) -> R<RelayPa
             .map_err(|_| RelayError::Configuration)?;
             conn.set_buffer_limit(Some(MAX_FRAME * 2));
             while conn.is_handshaking() {
-                conn.complete_io(&mut stream)
-                    .map_err(|_| RelayError::PeerAuthentication)?;
+                conn.complete_io(&mut stream).map_err(|e| {
+                    if e.kind() == io::ErrorKind::InvalidData
+                        || e.get_ref()
+                            .and_then(|e| e.downcast_ref::<rustls::Error>())
+                            .is_some()
+                    {
+                        RelayError::PeerAuthentication
+                    } else if control.is_some_and(|c| {
+                        Instant::now() >= c.until || c.cancel.load(Ordering::Relaxed)
+                    }) {
+                        RelayError::Timeout
+                    } else {
+                        peer_setup_error(e)
+                    }
+                })?;
             }
             Secure::A(StreamOwned::new(conn, stream))
         }
@@ -519,8 +674,21 @@ pub fn connect(identity: &RelayIdentity, options: RelayOptions<'_>) -> R<RelayPa
             .map_err(|_| RelayError::Configuration)?;
             conn.set_buffer_limit(Some(MAX_FRAME * 2));
             while conn.is_handshaking() {
-                conn.complete_io(&mut stream)
-                    .map_err(|_| RelayError::PeerAuthentication)?;
+                conn.complete_io(&mut stream).map_err(|e| {
+                    if e.kind() == io::ErrorKind::InvalidData
+                        || e.get_ref()
+                            .and_then(|e| e.downcast_ref::<rustls::Error>())
+                            .is_some()
+                    {
+                        RelayError::PeerAuthentication
+                    } else if control.is_some_and(|c| {
+                        Instant::now() >= c.until || c.cancel.load(Ordering::Relaxed)
+                    }) {
+                        RelayError::Timeout
+                    } else {
+                        peer_setup_error(e)
+                    }
+                })?;
             }
             Secure::B(StreamOwned::new(conn, stream))
         }
@@ -530,7 +698,14 @@ pub fn connect(identity: &RelayIdentity, options: RelayOptions<'_>) -> R<RelayPa
         Secure::B(s) => &mut s.sock.ws,
     };
     match ws.get_mut() {
-        MaybeTlsStream::Rustls(s) => s.sock.paired(),
+        MaybeTlsStream::Rustls(s) => {
+            s.sock.paired();
+            if let Some(c) = control {
+                s.sock.cancel = Some(c.cancel.clone());
+                s.sock.setup_finished = Some(c.finished.clone());
+                s.sock.deadline = Some(c.until);
+            }
+        }
         _ => return Err(RelayError::Configuration),
     }
     let shared = Arc::new(Shared {
