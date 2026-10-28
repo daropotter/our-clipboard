@@ -316,7 +316,9 @@ approval, and saves a new owner-signed peer-key record under a local name.
 `peer show` authenticates that record after restart. No network, clipboard or
 relay credential is needed. Existing/corrupt names are never replaced.
 See [the local peer-trust guide](docs/PEER-TRUST.md) for commands and storage limits.
-This is offline local approval, not group enrollment or automatic pilot trust yet.
+Pass `--peer-name NAME` alongside `--identity-profile PROFILE` to explicitly select
+an existing approval in the relay pilot. Missing/corrupt pins or changed keys stop
+without automatic enrollment or replacement. This does not grant group authority.
 
 ## Signed text event prototype
 

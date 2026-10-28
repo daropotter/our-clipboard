@@ -66,11 +66,44 @@ anti-rollback state. Restoring an old valid approval does not prove it is curren
 These approvals authorize only an explicitly selected local experimental peer
 relationship. They are not group membership, invitation/removal rights, a group
 manifest, relay access credentials or the final six-digit-code enrollment flow.
-This increment provides storage and offline CLI management; pilots still require
-manual fingerprint confirmation until explicit pin selection is integrated.
+Pilots use these records only when explicitly given a name; no automatic peer
+search, enrollment or replacement is performed.
+
+## Select an approval in the relay pilot
+
+After approving both directions, add `--peer-name mac` to the X11 pilot command
+alongside `--identity-profile workstation`. Select the corresponding local name
+and profile on the Mac. Both endpoints still run signed-offer mode; the names
+are local and are never sent to the peer or relay. Explicit `--replace-clipboard`
+consent is still required. Without `--peer-name`, the existing interactive
+fingerprint confirmation remains mandatory, even if an approval happens to exist.
+
+The selected pin is loaded/authenticated before the pilot publishes its own offer.
+A missing/corrupt pin, wrong local owner, locked store or invalid name stops before
+creating an offer or using transport/clipboard. After receiving a fresh signed
+offer with the right room/role, its full public key must match the pin. A changed
+key stops before transport with no interactive override or implicit replacement.
+`SAVED PEER VERIFIED` reports this local key match; it is not clipboard delivery.
+
+A valid match skips the interactive fingerprint prompt. This reuses prior explicit
+local approval, not trust based on first contact. Fresh offer exchange, exact
+signed application hello, TLS authentication, session quiet period, startup-copy
+suppression and original-TTL/signed-ACK rules still apply. Restart/Pause does not
+restore an old session or buffered text. `--reconnect` remains limited to the same
+live session. Pin selection is a startup snapshot, not live revocation handling.
+The existing relay needs no update. Physical X11↔macOS pin-selected pilot tests
+remain manual; native store tests and the isolated Linux path are CI coverage.
 
 CI tests authenticated reload, byte tampering, wrong owner/name, immutable names,
 missing/corrupt records, locks, path validation, symlinks and exposed directories.
 The native identity-store test also runs trust/show in separate processes with
 real disposable Secret Service/Keychain/Credential Manager entries. Host stores
 are not used by the private Linux container fixture.
+
+The private WSS fixture first confirms both device fingerprints and runs explicit
+`peer trust` on both sides, then starts new processes with fresh offers/room and
+selected pins. Closed stdin proves there is no fallback prompt. Native writes,
+ACKs, reconnect, original-TTL expiry and Pause remain tested. Missing/corrupt pins,
+a pin belonging to another local owner and a valid offer from an unapproved key
+are rejected without TCP/WSS, clipboard initialization or listener creation;
+existing approval bytes remain unchanged.

@@ -51,6 +51,7 @@ struct Options {
     macos_session_idle: bool,
     reconnect: bool,
     identity_profile: Option<String>,
+    peer_name: Option<String>,
     seconds: u64,
     ttl: u32,
     drift: u32,
@@ -73,6 +74,7 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
         macos_session_idle: false,
         reconnect: false,
         identity_profile: None,
+        peer_name: None,
         seconds: 300,
         ttl: 30_000,
         drift: 0,
@@ -132,6 +134,7 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
                 })
             }
             "--identity-profile" => o.identity_profile = Some(v.clone()),
+            "--peer-name" => o.peer_name = Some(v.clone()),
             "--offer" => o.offer = Some(v.clone()),
             "--peer-offer" => o.peer_offer = Some(v.clone()),
             "--relay-ca" => o.relay_ca = Some(v.clone()),
@@ -210,6 +213,15 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
         if o.room.is_none() || o.side.is_none() || o.offer.is_none() || o.peer_offer.is_none() {
             return Err("Relay pilot requires --room, --side, --offer and --peer-offer.");
         }
+        if o.peer_name.is_some() && o.identity_profile.is_none() {
+            return Err(
+                "--peer-name requires --identity-profile; no unsigned or automatic enrollment fallback.",
+            );
+        }
+        #[cfg(feature = "os-keyring")]
+        if let Some(name) = &o.peer_name {
+            crate::identity::validate_peer_name(name).map_err(|e| e.message())?;
+        }
         if o.offer == o.peer_offer {
             return Err("Own and peer public offer paths must differ.");
         }
@@ -225,6 +237,7 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
             || o.macos_session_idle
             || o.reconnect
             || o.identity_profile.is_some()
+            || o.peer_name.is_some()
         {
             return Err("Relay options require --relay.");
         }
@@ -832,6 +845,21 @@ fn persistent_signing(profile: &str) -> std::result::Result<SigningPeer, &'stati
         Err("--identity-profile requires the os-keyring feature; no ephemeral fallback.")
     }
 }
+fn named_peer(
+    profile: &str,
+    name: &str,
+    owner: &crate::identity::DeviceIdentity,
+) -> std::result::Result<[u8; 32], &'static str> {
+    #[cfg(feature = "os-keyring")]
+    {
+        crate::identity::load_peer(profile, name, owner).map_err(|e| e.message())
+    }
+    #[cfg(not(feature = "os-keyring"))]
+    {
+        let _ = (profile, name, owner);
+        Err("Named peers require the os-keyring feature; no automatic enrollment fallback.")
+    }
+}
 fn relay_pilot(o: &Options) -> std::result::Result<(), &'static str> {
     let token = AccessToken::from_env().map_err(|e| e.message())?;
     let outer =
@@ -840,6 +868,11 @@ fn relay_pilot(o: &Options) -> std::result::Result<(), &'static str> {
     let offer = identity.public_offer();
     let (peer, enrollment) = if let Some(profile) = &o.identity_profile {
         let signing = persistent_signing(profile)?;
+        let pinned = o
+            .peer_name
+            .as_deref()
+            .map(|name| named_peer(profile, name, &signing.identity))
+            .transpose()?;
         let public = signing.public();
         let own = SignedRelayOffer::new(
             &signing.identity,
@@ -854,9 +887,15 @@ fn relay_pilot(o: &Options) -> std::result::Result<(), &'static str> {
             "Own PUBLIC signed offer saved. Device fingerprint: {}",
             own.device_id().fingerprint()
         );
-        eprintln!(
-            "Exchange fresh signed public offers; compare device fingerprints independently on BOTH computers."
-        );
+        if pinned.is_some() {
+            eprintln!(
+                "Exchange fresh signed public offers; the selected local peer approval will be checked."
+            );
+        } else {
+            eprintln!(
+                "Exchange fresh signed public offers; compare device fingerprints independently on BOTH computers."
+            );
+        }
         let bytes = wait_offer_bytes(
             Path::new(o.peer_offer.as_ref().unwrap()),
             SignedRelayOffer::MAX_WIRE_BYTES,
@@ -870,10 +909,21 @@ fn relay_pilot(o: &Options) -> std::result::Result<(), &'static str> {
             .map_err(|_| "Peer signed offer invalid: signature, room, role or format mismatch; no legacy fallback.")?;
         let fingerprint = peer.device_id().fingerprint();
         eprintln!("Received PUBLIC peer device: {fingerprint}");
-        eprintln!(
-            "Compare with the other computer's OWN DEVICE fingerprint through an independent trusted channel, then type that full fingerprint and press Enter:"
-        );
-        confirm_peer(&mut BufReader::new(std::io::stdin().lock()), &fingerprint)?;
+        if let Some(expected) = pinned {
+            if peer.public_key() != expected {
+                return Err(
+                    "Saved peer key differs from the signed offer; connection blocked. Trust was not replaced.",
+                );
+            }
+            eprintln!(
+                "SAVED PEER VERIFIED: device key matches the explicitly selected local approval."
+            );
+        } else {
+            eprintln!(
+                "Compare with the other computer's OWN DEVICE fingerprint through an independent trusted channel, then type that full fingerprint and press Enter:"
+            );
+            confirm_peer(&mut BufReader::new(std::io::stdin().lock()), &fingerprint)?;
+        }
         let expected = PublicPeer {
             key: peer.public_key(),
             session: peer.session(),
@@ -943,7 +993,7 @@ fn protocol_stdout() -> std::result::Result<std::fs::File, &'static str> {
 }
 pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
     if matches!(args,[arg] if arg=="--help"||arg=="-h") {
-        return Ok("Usage: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nOptional --identity-profile PROFILE uses an explicitly initialized system-store identity to sign fresh offers; BOTH sides must use signed mode and confirm device fingerprints. No automatic enrollment or saved peer trust. Optional --reconnect retries transport loss within the same live authenticated session, without renewing TTL. Relay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. Optional --macos-session-idle observes the macOS caller/console state (experimental registry schema; unknown/stale means Idle). Optional --logind-idle observes the Linux/X11 logind session (unknown/stale means Idle). Optional --idle-file FILE pauses while the marker exists; metadata errors stop the pilot. This injects Idle state, not automatic screen-lock detection. Optional --pause-file FILE ends the session and discards pending text when present; resuming requires fresh pilots/offers. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
+        return Ok("Usage: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nOptional --identity-profile PROFILE uses an explicitly initialized system-store identity to sign fresh offers; BOTH sides must use signed mode and confirm device fingerprints. Optional --peer-name NAME selects an existing local peer approval and verifies the signed offer without a prompt; requires --identity-profile. Missing/corrupt/changed trust stops, never enrolls or replaces. Optional --reconnect retries transport loss within the same live authenticated session, without renewing TTL. Relay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. Optional --macos-session-idle observes the macOS caller/console state (experimental registry schema; unknown/stale means Idle). Optional --logind-idle observes the Linux/X11 logind session (unknown/stale means Idle). Optional --idle-file FILE pauses while the marker exists; metadata errors stop the pilot. This injects Idle state, not automatic screen-lock detection. Optional --pause-file FILE ends the session and discards pending text when present; resuming requires fresh pilots/offers. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
     }
     let o = options(args)?;
     #[cfg(not(target_os = "macos"))]
@@ -1075,6 +1125,28 @@ mod relay_tests {
         assert!(
             options(&signed).is_ok_and(|o| o.identity_profile.as_deref() == Some("workstation"))
         );
+        let mut named = signed.clone();
+        named.extend(["--peer-name".into(), "remote".into()]);
+        assert!(options(&named).is_ok());
+        let mut missing_identity = base.clone();
+        missing_identity.extend(["--peer-name".into(), "remote".into()]);
+        assert!(options(&missing_identity).is_err());
+        let mut ssh_named = [
+            "--replace-clipboard",
+            "--ssh",
+            "user@example",
+            "--remote-program",
+            "/bin/true",
+            "--max-drift-ppm",
+            "1000",
+            "--clock-granularity-ms",
+            "1",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        assert!(options(&ssh_named).is_ok());
+        ssh_named.extend(["--peer-name".into(), "remote".into()]);
+        assert!(options(&ssh_named).is_err());
         let ssh_signed = [
             "--replace-clipboard",
             "--stdio",
