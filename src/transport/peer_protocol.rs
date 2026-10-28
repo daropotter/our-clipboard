@@ -112,12 +112,14 @@ impl PublicPeer {
     }
 }
 pub(super) struct SigningPeer {
-    identity: DeviceIdentity,
+    pub(super) identity: DeviceIdentity,
     public: PublicPeer,
 }
 impl SigningPeer {
     pub fn new() -> Result<Self> {
-        let identity = DeviceIdentity::generate().map_err(|_| Error::Setup)?;
+        Self::with_identity(DeviceIdentity::generate().map_err(|_| Error::Setup)?)
+    }
+    pub fn with_identity(identity: DeviceIdentity) -> Result<Self> {
         let public = PublicPeer {
             key: identity.public_key(),
             session: SessionId::random().map_err(|_| Error::Setup)?,

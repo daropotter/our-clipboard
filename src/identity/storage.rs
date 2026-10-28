@@ -184,6 +184,21 @@ pub fn manage(action: &str, profile: &str) -> Result<String, IdentityError> {
         "show" => false,
         _ => return Err(IdentityError::Configuration),
     };
+    let identity = platform_identity(profile, initialize)?;
+    Ok(format!(
+        "Client device identity: {}\nStorage: system credential store",
+        identity.id().fingerprint()
+    ))
+}
+
+/// Load an existing profile only: never initializes, rotates or repairs its pin.
+#[cfg(feature = "os-keyring")]
+pub fn open_existing(profile: &str) -> Result<DeviceIdentity, IdentityError> {
+    platform_identity(profile, false)
+}
+#[cfg(feature = "os-keyring")]
+fn platform_identity(profile: &str, initialize: bool) -> Result<DeviceIdentity, IdentityError> {
+    validate_profile(profile)?;
     let root = if let Some(directory) = std::env::var_os("OUR_CLIPBOARD_CONFIG_DIR") {
         PathBuf::from(directory)
     } else {
@@ -194,11 +209,7 @@ pub fn manage(action: &str, profile: &str) -> Result<String, IdentityError> {
     };
     let entry = keyring::Entry::new(SERVICE, &format!("client-v1:{profile}"))
         .map_err(|_| IdentityError::Unavailable)?;
-    let identity = load(&PlatformStore(entry), &root, profile, initialize)?;
-    Ok(format!(
-        "Client device identity: {}\nStorage: system credential store",
-        identity.id().fingerprint()
-    ))
+    load(&PlatformStore(entry), &root, profile, initialize)
 }
 
 #[cfg(test)]
@@ -228,6 +239,25 @@ mod tests {
             self.secret.replace(Some(Zeroizing::new(secret.to_vec())));
             Ok(())
         }
+    }
+    #[test]
+    fn opening_a_profile_never_creates_a_key_or_recovers_a_missing_pin() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Memory::default();
+        assert!(matches!(
+            load(&store, root.path(), "pilot", false),
+            Err(IdentityError::Missing)
+        ));
+        assert_eq!(store.writes.get(), 0);
+        assert!(!root.path().join("pilot/device.pub").exists());
+        let initialized = tempfile::tempdir().unwrap();
+        load(&store, initialized.path(), "pilot", true).unwrap();
+        assert!(matches!(
+            load(&store, root.path(), "pilot", false),
+            Err(IdentityError::Missing)
+        ));
+        assert_eq!(store.writes.get(), 1);
+        assert!(!root.path().join("pilot/device.pub").exists());
     }
     #[test]
     fn initializes_once_and_reloads_the_same_identity() {

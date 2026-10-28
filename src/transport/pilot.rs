@@ -1,6 +1,8 @@
 //! Supervised two-machine pilot over pinned WSS or pretrusted SSH. No OS Idle hooks.
 mod link;
-use super::outbound::{self, AccessToken, PublicOffer, RelayIdentity, Room, Side};
+use super::outbound::{
+    self, AccessToken, PublicOffer, RelayIdentity, Room, Side, SignedRelayOffer,
+};
 use super::peer_protocol::{self as wire, Kind, Protocol, PublicPeer, Settings, SigningPeer};
 use super::*;
 use crate::{
@@ -48,6 +50,7 @@ struct Options {
     logind_idle: bool,
     macos_session_idle: bool,
     reconnect: bool,
+    identity_profile: Option<String>,
     seconds: u64,
     ttl: u32,
     drift: u32,
@@ -69,6 +72,7 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
         logind_idle: false,
         macos_session_idle: false,
         reconnect: false,
+        identity_profile: None,
         seconds: 300,
         ttl: 30_000,
         drift: 0,
@@ -127,6 +131,7 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
                     _ => return Err("Relay side must be a or b."),
                 })
             }
+            "--identity-profile" => o.identity_profile = Some(v.clone()),
             "--offer" => o.offer = Some(v.clone()),
             "--peer-offer" => o.peer_offer = Some(v.clone()),
             "--relay-ca" => o.relay_ca = Some(v.clone()),
@@ -219,6 +224,7 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
             || o.logind_idle
             || o.macos_session_idle
             || o.reconnect
+            || o.identity_profile.is_some()
         {
             return Err("Relay options require --relay.");
         }
@@ -356,6 +362,7 @@ fn session(
     o: &Options,
     guard: Option<outbound::RelayLifetime>,
     reconnect: Option<Arc<Reconnector>>,
+    enrollment: Option<(SigningPeer, PublicPeer)>,
 ) -> Result<()> {
     let role = if o.relay.is_some() {
         if o.side == Some(Side::A) { "a" } else { "b" }
@@ -364,9 +371,12 @@ fn session(
     } else {
         "local"
     };
-    let signing = SigningPeer::new()?;
+    let (signing, expected) = match enrollment {
+        Some((signing, peer)) => (signing, Some(peer)),
+        None => (SigningPeer::new()?, None),
+    };
     let own = signing.public();
-    let (initial, peer) = Link::open(input, output, own, None, guard, None)?;
+    let (initial, peer) = Link::open(input, output, own, expected, guard, None)?;
     let mut link = Some(initial);
     let mut protocol = Protocol::with_settings(signing, peer, settings(own, peer, o)?)?;
     let mut attempt: Option<mpsc::Receiver<std::result::Result<Link, AttemptError>>> = None;
@@ -729,6 +739,9 @@ fn session(
     Ok(())
 }
 fn save_offer(path: &Path, offer: &PublicOffer) -> std::result::Result<(), &'static str> {
+    save_offer_bytes(path, &offer.to_wire())
+}
+fn save_offer_bytes(path: &Path, bytes: &[u8]) -> std::result::Result<(), &'static str> {
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -736,11 +749,15 @@ fn save_offer(path: &Path, offer: &PublicOffer) -> std::result::Result<(), &'sta
         .map_err(
             |_| "Public offer path must be new and writable; existing files are never replaced.",
         )?;
-    file.write_all(&offer.to_wire())
+    file.write_all(bytes)
         .and_then(|_| file.sync_all())
         .map_err(|_| "Could not save public offer.")
 }
 fn wait_offer(path: &Path) -> std::result::Result<PublicOffer, &'static str> {
+    PublicOffer::from_wire(&wait_offer_bytes(path, 32_777)?)
+        .map_err(|_| "Peer public offer is invalid or oversized.")
+}
+fn wait_offer_bytes(path: &Path, limit: usize) -> std::result::Result<Vec<u8>, &'static str> {
     let until = Instant::now() + Duration::from_secs(300);
     loop {
         match File::open(path) {
@@ -753,11 +770,14 @@ fn wait_offer(path: &Path) -> std::result::Result<PublicOffer, &'static str> {
                     return Err("Peer offer must be a regular file.");
                 }
                 let mut bytes = Vec::new();
-                file.take(32_778)
+                file.take((limit + 1) as u64)
                     .read_to_end(&mut bytes)
                     .map_err(|_| "Could not read peer offer.")?;
-                return PublicOffer::from_wire(&bytes)
-                    .map_err(|_| "Peer public offer is invalid or oversized.");
+                return if bytes.len() > limit {
+                    Err("Peer public offer is invalid or oversized.")
+                } else {
+                    Ok(bytes)
+                };
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && Instant::now() < until => {
                 thread::sleep(Duration::from_millis(100))
@@ -766,15 +786,15 @@ fn wait_offer(path: &Path) -> std::result::Result<PublicOffer, &'static str> {
         }
     }
 }
-// sha256: plus 32 digest bytes encoded as hex, CRLF, and one overflow byte.
-const MAX_FINGERPRINT_INPUT: u64 = ("sha256:".len() + 32 * 2 + 2 + 1) as u64;
+// Expected fingerprint plus CRLF and one overflow byte; bounded in either mode.
 fn confirm_peer(input: &mut impl BufRead, expected: &str) -> std::result::Result<(), &'static str> {
+    let max_input = (expected.len() + 2 + 1) as u64;
     let mut text = String::new();
     input
-        .take(MAX_FINGERPRINT_INPUT)
+        .take(max_input)
         .read_line(&mut text)
         .map_err(|_| "Could not read fingerprint confirmation.")?;
-    if text.len() as u64 >= MAX_FINGERPRINT_INPUT || text.trim() != expected {
+    if text.len() as u64 >= max_input || text.trim() != expected {
         return Err(
             "Peer fingerprint confirmation failed; no network pairing or clipboard access occurred.",
         );
@@ -799,29 +819,86 @@ fn relay_session_error(error: Error) -> &'static str {
         Error::Worker => "Relay pilot stopped (Worker): a protocol worker failed.",
     }
 }
+fn persistent_signing(profile: &str) -> std::result::Result<SigningPeer, &'static str> {
+    #[cfg(feature = "os-keyring")]
+    {
+        let identity = crate::identity::open_existing(profile).map_err(|e| e.message())?;
+        SigningPeer::with_identity(identity)
+            .map_err(|_| "Could not create a fresh application session.")
+    }
+    #[cfg(not(feature = "os-keyring"))]
+    {
+        let _ = profile;
+        Err("--identity-profile requires the os-keyring feature; no ephemeral fallback.")
+    }
+}
 fn relay_pilot(o: &Options) -> std::result::Result<(), &'static str> {
     let token = AccessToken::from_env().map_err(|e| e.message())?;
     let outer =
         outbound::relay_roots(o.relay_ca.as_deref().map(Path::new)).map_err(|e| e.message())?;
     let identity = RelayIdentity::generate().map_err(|e| e.message())?;
     let offer = identity.public_offer();
-    save_offer(Path::new(o.offer.as_ref().unwrap()), &offer)?;
-    eprintln!(
-        "Own PUBLIC offer saved. Fingerprint: {}",
-        offer.fingerprint()
-    );
-    eprintln!(
-        "Transfer only this public offer by your chosen channel; waiting up to five minutes for the peer offer."
-    );
-    let peer = wait_offer(Path::new(o.peer_offer.as_ref().unwrap()))?;
-    eprintln!("Received PUBLIC peer offer: {}", peer.fingerprint());
-    eprintln!(
-        "Compare with the other computer's OWN fingerprint through an independent trusted channel, then type that full fingerprint and press Enter:"
-    );
-    confirm_peer(
-        &mut BufReader::new(std::io::stdin().lock()),
-        &peer.fingerprint(),
-    )?;
+    let (peer, enrollment) = if let Some(profile) = &o.identity_profile {
+        let signing = persistent_signing(profile)?;
+        let public = signing.public();
+        let own = SignedRelayOffer::new(
+            &signing.identity,
+            public.session,
+            o.room.unwrap(),
+            o.side.unwrap(),
+            &offer,
+        )
+        .map_err(|_| "Could not sign public transport offer.")?;
+        save_offer_bytes(Path::new(o.offer.as_ref().unwrap()), own.to_wire())?;
+        eprintln!(
+            "Own PUBLIC signed offer saved. Device fingerprint: {}",
+            own.device_id().fingerprint()
+        );
+        eprintln!(
+            "Exchange fresh signed public offers; compare device fingerprints independently on BOTH computers."
+        );
+        let bytes = wait_offer_bytes(
+            Path::new(o.peer_offer.as_ref().unwrap()),
+            SignedRelayOffer::MAX_WIRE_BYTES,
+        )?;
+        let side = if o.side == Some(Side::A) {
+            Side::B
+        } else {
+            Side::A
+        };
+        let peer = SignedRelayOffer::from_wire(&bytes, o.room.unwrap(), side)
+            .map_err(|_| "Peer signed offer invalid: signature, room, role or format mismatch; no legacy fallback.")?;
+        let fingerprint = peer.device_id().fingerprint();
+        eprintln!("Received PUBLIC peer device: {fingerprint}");
+        eprintln!(
+            "Compare with the other computer's OWN DEVICE fingerprint through an independent trusted channel, then type that full fingerprint and press Enter:"
+        );
+        confirm_peer(&mut BufReader::new(std::io::stdin().lock()), &fingerprint)?;
+        let expected = PublicPeer {
+            key: peer.public_key(),
+            session: peer.session(),
+        };
+        (peer.into_transport_offer(), Some((signing, expected)))
+    } else {
+        save_offer(Path::new(o.offer.as_ref().unwrap()), &offer)?;
+        eprintln!(
+            "Own PUBLIC offer saved. Fingerprint: {}",
+            offer.fingerprint()
+        );
+        eprintln!(
+            "Transfer only this public offer by your chosen channel; waiting up to five minutes for the peer offer."
+        );
+        let peer = wait_offer(Path::new(o.peer_offer.as_ref().unwrap()))?;
+        eprintln!("Received PUBLIC peer offer: {}", peer.fingerprint());
+        eprintln!(
+            "Compare with the other computer's OWN fingerprint through an independent trusted channel, then type that full fingerprint and press Enter:"
+        );
+        confirm_peer(
+            &mut BufReader::new(std::io::stdin().lock()),
+            &peer.fingerprint(),
+        )?;
+        (peer, None)
+    };
     let config = Arc::new(Reconnector {
         identity,
         peer,
@@ -840,6 +917,7 @@ fn relay_pilot(o: &Options) -> std::result::Result<(), &'static str> {
         o,
         Some(guard),
         o.reconnect.then_some(config),
+        enrollment,
     )
     .map_err(relay_session_error)
 }
@@ -865,7 +943,7 @@ fn protocol_stdout() -> std::result::Result<std::fs::File, &'static str> {
 }
 pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
     if matches!(args,[arg] if arg=="--help"||arg=="-h") {
-        return Ok("Usage: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nOptional --reconnect retries transport loss within the same live authenticated session, without renewing TTL. Relay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. Optional --macos-session-idle observes the macOS caller/console state (experimental registry schema; unknown/stale means Idle). Optional --logind-idle observes the Linux/X11 logind session (unknown/stale means Idle). Optional --idle-file FILE pauses while the marker exists; metadata errors stop the pilot. This injects Idle state, not automatic screen-lock detection. Optional --pause-file FILE ends the session and discards pending text when present; resuming requires fresh pilots/offers. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
+        return Ok("Usage: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nOptional --identity-profile PROFILE uses an explicitly initialized system-store identity to sign fresh offers; BOTH sides must use signed mode and confirm device fingerprints. No automatic enrollment or saved peer trust. Optional --reconnect retries transport loss within the same live authenticated session, without renewing TTL. Relay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. Optional --macos-session-idle observes the macOS caller/console state (experimental registry schema; unknown/stale means Idle). Optional --logind-idle observes the Linux/X11 logind session (unknown/stale means Idle). Optional --idle-file FILE pauses while the marker exists; metadata errors stop the pilot. This injects Idle state, not automatic screen-lock detection. Optional --pause-file FILE ends the session and discards pending text when present; resuming requires fresh pilots/offers. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
     }
     let o = options(args)?;
     #[cfg(not(target_os = "macos"))]
@@ -904,13 +982,13 @@ pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
         return Ok(String::new());
     }
     let result = if o.stdio {
-        session(std::io::stdin(), output, &o, None, None)
+        session(std::io::stdin(), output, &o, None, None, None)
     } else {
         drop(output);
         let mut child = ChildGuard(ssh(&o)?);
         let input = child.0.stdout.take().ok_or("SSH output unavailable.")?;
         let output = child.0.stdin.take().ok_or("SSH input unavailable.")?;
-        session(input, output, &o, None, None)
+        session(input, output, &o, None, None, None)
     };
     result.map_err(|_|"Pilot stopped: transport, clock or clipboard operation failed; content and keys are omitted.")?;
     Ok(String::new())
@@ -992,6 +1070,23 @@ mod relay_tests {
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
         assert!(options(&base).is_ok());
+        let mut signed = base.clone();
+        signed.extend(["--identity-profile".into(), "workstation".into()]);
+        assert!(
+            options(&signed).is_ok_and(|o| o.identity_profile.as_deref() == Some("workstation"))
+        );
+        let ssh_signed = [
+            "--replace-clipboard",
+            "--stdio",
+            "--identity-profile",
+            "workstation",
+            "--max-drift-ppm",
+            "1000",
+            "--clock-granularity-ms",
+            "1",
+        ]
+        .map(str::to_string);
+        assert!(options(&ssh_signed).is_err());
         let mut mixed = base.clone();
         mixed.extend(["--stdio".into()]);
         assert!(options(&mixed).is_err());
@@ -1041,6 +1136,29 @@ mod relay_tests {
             (Error::Worker, "Worker"),
         ] {
             assert!(relay_session_error(error).contains(&format!("({name})")));
+        }
+    }
+    #[test]
+    fn device_fingerprint_confirmation_accepts_full_width_and_rejects_truncation() {
+        let expected = crate::identity::DeviceIdentity::generate()
+            .unwrap()
+            .id()
+            .fingerprint();
+        for ending in ["\n", "\r\n"] {
+            assert!(
+                confirm_peer(
+                    &mut std::io::Cursor::new(format!("{expected}{ending}")),
+                    &expected
+                )
+                .is_ok()
+            );
+        }
+        for text in [
+            expected[..expected.len() - 1].to_owned(),
+            format!("{expected}x"),
+            format!("{expected}   "),
+        ] {
+            assert!(confirm_peer(&mut std::io::Cursor::new(text), &expected).is_err());
         }
     }
     #[test]

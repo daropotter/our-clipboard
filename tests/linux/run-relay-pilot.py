@@ -14,7 +14,10 @@ import time
 binary, helper = sys.argv[1:3]
 logind_fixture = sys.argv[3] if len(sys.argv) > 3 else None
 reconnect_mode = os.environ.get("OUR_CLIPBOARD_TEST_RECONNECT", "")
+signed_offers = os.environ.get("OUR_CLIPBOARD_TEST_SIGNED_OFFERS") == "1"
 external = os.environ.get("OUR_CLIPBOARD_EXTERNAL_RELAY") == "1"
+if signed_offers and external:
+    raise SystemExit("Signed-offer fixtures require a private disposable keyring and relay")
 relay_port = 8443 if external else 443
 children = []
 handles = []
@@ -52,6 +55,8 @@ def offer_ready(path):
     if not path.exists():
         return False
     b = path.read_bytes()
+    if signed_offers:
+        return len(b) >= 164 and b[:5] == b"OCDO\x01" and len(b) == 154 + int.from_bytes(b[86:90], "big")
     return len(b) >= 10 and len(b) == 9 + int.from_bytes(b[5:9], "big")
 
 with tempfile.TemporaryDirectory() as directory:
@@ -156,6 +161,14 @@ with tempfile.TemporaryDirectory() as directory:
                 start_system(side)
         room = secrets.token_hex(32)  # Public routing ID, not a credential.
         clients = {}
+        device_fingerprints = {}
+        if signed_offers:
+            assert os.environ.get("OUR_CLIPBOARD_PRIVATE_KEYRING_BUS") == "1", "Private keyring required"
+            for side in ("a", "b"):
+                result = subprocess.run([binary, "identity", "init", "--profile", "pilot-" + side],
+                                        env=env, capture_output=True, timeout=10)
+                assert result.returncode == 0, "Disposable identity initialization failed"
+                device_fingerprints[side] = result.stdout.decode().splitlines()[0].split(": ", 1)[1]
         (root / "a.idle").touch()  # Start without initializing a native observer.
         for side, display, peer in (("a", ":91", "b"), ("b", ":92", "a")):
             args = ["strace", "-f", "-qq", "-e", "trace=listen", "-o", str(root / f"{side}.trace"),
@@ -164,6 +177,8 @@ with tempfile.TemporaryDirectory() as directory:
                     "--offer", str(root / f"{side}.offer"), "--peer-offer", str(root / f"{peer}-for-{side}.offer"),
                     "--seconds", "90" if reconnect_mode == "stale" else "30" if reconnect_mode else "14", "--ttl-ms", "30000" if reconnect_mode == "stale" else "3000" if reconnect_mode else "1000", "--idle-file", str(root / f"{side}.idle"), "--pause-file", str(root / f"{side}.pause"), "--max-drift-ppm", "1000",
                     "--clock-granularity-ms", "1"]
+            if signed_offers:
+                args.extend(["--identity-profile", "pilot-" + side])
             if reconnect_mode:
                 args.append("--reconnect")
             if logind_fixture:
@@ -176,7 +191,11 @@ with tempfile.TemporaryDirectory() as directory:
             temp = root / f"{peer}-for-{side}.tmp"
             shutil.copyfile(root / f"{peer}.offer", temp)
             temp.replace(root / f"{peer}-for-{side}.offer")
-            fingerprint = "sha256:" + hashlib.sha256(data).hexdigest()
+            if signed_offers:
+                fingerprint = "ed25519-sha256-v1:" + hashlib.sha256(b"our-clipboard/device-id/v1\0" + data[5:37]).hexdigest()
+                assert fingerprint == device_fingerprints[peer], "Pilot did not reload its initialized device key"
+            else:
+                fingerprint = "sha256:" + hashlib.sha256(data).hexdigest()
             clients[side].stdin.write((fingerprint + "\n").encode())
             clients[side].stdin.flush()
             clients[side].stdin.close()
@@ -258,21 +277,48 @@ with tempfile.TemporaryDirectory() as directory:
         for side, process in clients.items():
             assert process.wait(timeout=35) == expected_exit, "Pilot exited unsuccessfully"
             assert "listen(" not in (root / f"{side}.trace").read_text(), "Endpoint tried to listen"
-        bad = spawn(["strace", "-f", "-qq", "-e", "trace=listen,connect", "-o", str(root / "bad.trace"),
+        bad_args = ["strace", "-f", "-qq", "-e", "trace=listen,connect", "-o", str(root / "bad.trace"),
                      binary, "pilot", "--replace-clipboard", "--relay", f"wss://localhost:{relay_port}/our-clipboard/v1",
                      "--relay-ca", str(cert), "--room", room, "--side", "a", "--offer", str(root / "bad.offer"),
                      "--peer-offer", str(root / "b.offer"), "--seconds", "12", "--ttl-ms", "1000",
-                     "--max-drift-ppm", "1000", "--clock-granularity-ms", "1"],
-                    env=dict(env, DISPLAY=":91"), stdin=subprocess.PIPE, log=root / "bad.log")
+                     "--max-drift-ppm", "1000", "--clock-granularity-ms", "1"]
+        if signed_offers:
+            bad_args.extend(["--identity-profile", "pilot-a"])
+        bad = spawn(bad_args, env=dict(env, DISPLAY=":91"), stdin=subprocess.PIPE, log=root / "bad.log")
         bad.stdin.write(b"yes\n")
         bad.stdin.close()
         assert bad.wait(timeout=5) == 2, "Unverified fingerprint was accepted"
         assert "Peer fingerprint confirmation failed" in status(root / "bad.log"), "Expected trust rejection diagnostic"
-        assert "connect(" not in (root / "bad.trace").read_text(), "Connected before fingerprint confirmation"
+        connections = [line for line in (root / "bad.trace").read_text().splitlines() if "connect(" in line]
+        # Signing reloads Secret Service over local Unix IPC before the prompt.
+        # No Internet/TCP connection may precede fingerprint confirmation.
+        assert not connections or (signed_offers and all("AF_UNIX" in line for line in connections)), "Transport connected before fingerprint confirmation"
         assert "listen(" not in (root / "bad.trace").read_text(), "Rejected endpoint tried to listen"
+        if signed_offers:
+            # A signed-mode pilot must reject an otherwise valid legacy offer,
+            # even if stdin would confirm it. Never silently downgrade trust.
+            legacy = root / "legacy.offer"
+            legacy.write_bytes((root / "b.offer").read_bytes()[90:-64])
+            downgrade_args = bad_args.copy()
+            for option, value in (("--offer", root / "downgrade.offer"),
+                                  ("--peer-offer", legacy), ("-o", root / "downgrade.trace")):
+                downgrade_args[downgrade_args.index(option) + 1] = str(value)
+            downgrade = spawn(downgrade_args, env=dict(env, DISPLAY=":91"),
+                              stdin=subprocess.DEVNULL, log=root / "downgrade.log")
+            assert downgrade.wait(timeout=5) == 2, "Unsigned offer accepted in signed mode"
+            assert "no legacy fallback" in status(root / "downgrade.log"), "Missing downgrade diagnostic"
+            trace = (root / "downgrade.trace").read_text()
+            assert all("AF_UNIX" in line for line in trace.splitlines() if "connect(" in line), "Downgrade reached relay"
+            assert "listen(" not in trace, "Downgrade rejection opened a listener"
         logs = status(root / "a.log") + status(root / "b.log")
         assert logs.count("Applied peer event.") == expected_apps, "Unexpected repeated application/echo"
         assert logs.count("Applied pending peer event.") == expected_pending, "Buffered value was not applied exactly once"
+        if signed_offers:
+            for side in ("a", "b"):
+                result = subprocess.run([binary, "identity", "show", "--profile", "pilot-" + side],
+                                        env=env, capture_output=True, timeout=10)
+                assert result.returncode == 0 and device_fingerprints[side] in result.stdout.decode(), "Device identity changed"
+            print("System-store signed offers passed: stable device key, bound session/room/role, fresh TLS and confirmations")
         if reconnect_mode:
             print("Reconnect fault injection passed: " + reconnect_mode)
         print("Outbound WSS pilot passed: Idle startup/pause/resume/TTL, real HTTPS, pinned peer TLS, independent confirmations, startup isolation, bidirectional writes/ACKs and no client listen syscall.")
