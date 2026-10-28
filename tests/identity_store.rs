@@ -4,6 +4,19 @@ use std::process::Command;
 #[test]
 #[ignore = "writes an ephemeral credential; use disposable OS/Secret Service stores"]
 fn client_identity_survives_process_restarts() {
+    check_native_identity(false);
+}
+
+#[cfg(feature = "clipboard")]
+#[test]
+#[ignore = "writes an ephemeral credential; use disposable OS/Secret Service stores"]
+fn native_preflight_reads_persistent_identity_and_peer_trust() {
+    check_native_identity(true);
+}
+
+fn check_native_identity(check_preflight: bool) {
+    #[cfg(not(feature = "clipboard"))]
+    assert!(!check_preflight);
     let mut nonce = [0; 12];
     getrandom::fill(&mut nonce).unwrap();
     let profile = format!(
@@ -133,7 +146,7 @@ fn client_identity_survives_process_restarts() {
             .contains(&fingerprint)
     );
     #[cfg(feature = "clipboard")]
-    {
+    if check_preflight {
         let launch = config.path().join("launch.json");
         let data = serde_json::json!({"version":1,"relay":"wss://relay.invalid/our-clipboard/v1","room":"1".repeat(64),"side":"a","identity_profile":profile,"peer_name":"remote","offer":"own.offer","peer_offer":"pending.offer","max_drift_ppm":1000,"clock_granularity_ms":1});
         std::fs::write(&launch, data.to_string()).unwrap();

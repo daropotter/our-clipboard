@@ -213,12 +213,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2025, macos-15]
+        features: [os-keyring, "os-keyring,clipboard"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --locked --no-default-features --features os-keyring --test identity_store -- --ignored --test-threads=1
+      - run: cargo test --locked --no-default-features --features ${{ matrix.features }} --test identity_store -- --ignored --test-threads=1
   linux-identity:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
