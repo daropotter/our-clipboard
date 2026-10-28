@@ -127,3 +127,11 @@ run `identity init` explicitly under its existing fail-closed rules; no replacem
 identity/key is generated merely to make a check pass. The command has no
 `--replace-clipboard` option and stores no clipboard consent. A later launch still
 requires the explicit flag in its own invocation.
+
+The native identity CI matrix preserves headless store tests and separately runs
+`native_preflight_reads_persistent_identity_and_peer_trust` with the client enabled
+on macOS and Windows. This subprocess test verifies successful reads, rejection
+of a corrupted approval, and rejection of missing profile/lock metadata without
+repair or offer creation. Linux uses a disposable Secret Service; these checks
+must not be run against a personal credential store. They complement the isolated
+WSS/clipboard fixture and do not replace physical X11↔macOS validation.

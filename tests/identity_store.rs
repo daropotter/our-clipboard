@@ -155,14 +155,7 @@ fn check_native_identity(check_preflight: bool) {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&launch, std::fs::Permissions::from_mode(0o600)).unwrap();
         }
-        let checked = Command::new(&executable)
-            .args(["pilot", "preflight", "--file", launch.to_str().unwrap()])
-            .env("OUR_CLIPBOARD_CONFIG_DIR", config.path())
-            .env("OUR_CLIPBOARD_RELAY_TOKEN", "a".repeat(64))
-            .env_remove("DISPLAY")
-            .env_remove("WAYLAND_DISPLAY")
-            .output()
-            .unwrap();
+        let checked = preflight(&executable, config.path());
         assert!(
             checked.status.success(),
             "Native local preflight failed (details omitted)"
@@ -189,4 +182,47 @@ fn check_native_identity(check_preflight: bool) {
         Some(2)
     );
     assert_eq!(std::fs::read(&pin).unwrap(), b"corrupt");
+    #[cfg(feature = "clipboard")]
+    if check_preflight {
+        let rejected = preflight(&executable, config.path());
+        assert_eq!(rejected.status.code(), Some(2));
+        assert!(!String::from_utf8_lossy(&rejected.stdout).contains("LOCAL PREFLIGHT PASSED"));
+        assert_eq!(std::fs::read(&pin).unwrap(), b"corrupt");
+
+        // A valid credential and approval must not cause missing metadata to be repaired.
+        std::fs::write(&pin, &original).unwrap();
+        let profile_dir = config.path().join(&profile);
+        let lock = profile_dir.join("identity.lock");
+        std::fs::remove_file(&lock).unwrap();
+        assert_eq!(preflight(&executable, config.path()).status.code(), Some(2));
+        assert!(!lock.exists(), "preflight recreated the profile lock");
+        assert_eq!(std::fs::read(&pin).unwrap(), original);
+
+        let saved = config.path().join("saved-profile");
+        std::fs::rename(&profile_dir, &saved).unwrap();
+        assert_eq!(preflight(&executable, config.path()).status.code(), Some(2));
+        assert!(
+            !profile_dir.exists(),
+            "preflight recreated the profile directory"
+        );
+        assert_eq!(
+            std::fs::read(saved.join("peers/remote.pin")).unwrap(),
+            original
+        );
+        assert!(!config.path().join("own.offer").exists());
+        assert!(!config.path().join("pending.offer").exists());
+    }
+}
+
+#[cfg(feature = "clipboard")]
+fn preflight(executable: &std::ffi::OsStr, config: &std::path::Path) -> std::process::Output {
+    Command::new(executable)
+        .args(["pilot", "preflight", "--file"])
+        .arg(config.join("launch.json"))
+        .env("OUR_CLIPBOARD_CONFIG_DIR", config)
+        .env("OUR_CLIPBOARD_RELAY_TOKEN", "a".repeat(64))
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .output()
+        .unwrap()
 }
