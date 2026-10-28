@@ -169,7 +169,10 @@ CI restarts an isolated real WSS relay between native copies, verifies fresh
 offline delivery, expired-text rejection, new copies of identical text after
 recovery, no echo, unchanged application session and responsive Pause while the
 peer is absent. A separate case changes the relay credential and requires a
-terminal authentication error. These fault tests never target the stage service.
+terminal authentication error. A long-outage case buffers an Idle event with a
+30-second TTL, disconnects for 22 seconds, verifies stale calibration discards the
+candidate without ending the session, then delivers a new copy after reconnect.
+These fault tests never target the stage service.
 
 ## Optional macOS caller/console observation
 

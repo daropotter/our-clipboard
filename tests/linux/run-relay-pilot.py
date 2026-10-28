@@ -162,7 +162,7 @@ with tempfile.TemporaryDirectory() as directory:
                     binary, "pilot", "--replace-clipboard", "--relay", f"wss://localhost:{relay_port}/our-clipboard/v1",
                     "--relay-ca", str(cert), "--room", room, "--side", side,
                     "--offer", str(root / f"{side}.offer"), "--peer-offer", str(root / f"{peer}-for-{side}.offer"),
-                    "--seconds", "30" if reconnect_mode else "14", "--ttl-ms", "3000" if reconnect_mode else "1000", "--idle-file", str(root / f"{side}.idle"), "--pause-file", str(root / f"{side}.pause"), "--max-drift-ppm", "1000",
+                    "--seconds", "90" if reconnect_mode == "stale" else "30" if reconnect_mode else "14", "--ttl-ms", "30000" if reconnect_mode == "stale" else "3000" if reconnect_mode else "1000", "--idle-file", str(root / f"{side}.idle"), "--pause-file", str(root / f"{side}.pause"), "--max-drift-ppm", "1000",
                     "--clock-granularity-ms", "1"]
             if reconnect_mode:
                 args.append("--reconnect")
@@ -180,7 +180,8 @@ with tempfile.TemporaryDirectory() as directory:
             clients[side].stdin.write((fingerprint + "\n").encode())
             clients[side].stdin.flush()
             clients[side].stdin.close()
-        wait_for(lambda: "IDLE:" in status(root / "a.log") and "READY:" in status(root / "b.log"))
+        wait_for(lambda: "IDLE:" in status(root / "a.log") and "READY:" in status(root / "b.log"),
+                 40 if reconnect_mode == "stale" else 10)
         assert "READY:" not in status(root / "a.log"), "Paused startup initialized the observer"
         (root / "a.idle").unlink()
         if logind_fixture:

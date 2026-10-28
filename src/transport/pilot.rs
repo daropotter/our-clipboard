@@ -687,14 +687,18 @@ fn session(
                     eprintln!("[{role}] Applied pending peer event.");
                 }
                 if !transport_ready && let Some(estimate) = &estimate {
-                    protocol.maintain_idle(estimate)?;
+                    protocol.maintain_disconnected(estimate)?;
                 }
                 next_retry = now + APPLY_RETRY_INTERVAL_MS;
             }
         } else {
             if idle && now >= next_retry {
                 if let Some(estimate) = &estimate {
-                    protocol.maintain_idle(estimate)?;
+                    if o.reconnect && !transport_ready {
+                        protocol.maintain_disconnected(estimate)?;
+                    } else {
+                        protocol.maintain_idle(estimate)?;
+                    }
                 }
                 next_retry = now + APPLY_RETRY_INTERVAL_MS;
             }

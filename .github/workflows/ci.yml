@@ -150,7 +150,7 @@ jobs:
       - run: docker build -t our-clipboard-relay-tests -f tests/linux/Dockerfile.relay .
       - name: Real WSS outage, original TTL, cancellation and auth rejection
         run: |
-          for scenario in 1 auth; do
+          for scenario in 1 auth stale; do
             docker run --rm --network none -e OUR_CLIPBOARD_TEST_RECONNECT="$scenario" \
               -v "$PWD/target/debug/our-clipboard:/pilot:ro" \
               -v "$PWD/target/debug/examples/synthetic-clipboard-sync:/helper:ro" \

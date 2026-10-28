@@ -294,6 +294,16 @@ impl Protocol {
             .maintain(estimate, &SystemBootClock)
             .map_err(|_| Error::Frame)
     }
+    /// A stale estimate has already released the candidate. During reconnect
+    /// this expected loss of calibration must not terminate the live session.
+    pub fn maintain_disconnected(&mut self, estimate: &ClockEstimate) -> Result<()> {
+        match self.delivery.maintain(estimate, &SystemBootClock) {
+            Ok(()) | Err(BufferError::Clock(crate::freshness::ClockError::StaleCalibration)) => {
+                Ok(())
+            }
+            Err(_) => Err(Error::Frame),
+        }
+    }
     pub fn receive_idle(
         &mut self,
         event: &SignedTextEvent,

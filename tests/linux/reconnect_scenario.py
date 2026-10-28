@@ -16,6 +16,40 @@ def run(root, clients, *, mode, stop_relay, restart_relay, seed, inspect, status
             assert process.wait(timeout=10) == 2, "Reconnect accepted rotated transport credential"
             assert "(Authentication)" in status(root / f"{side}.log"), "Auth error was silently retried"
         return 2, 0, 2
+    if mode == "stale":
+        # A peer event buffered while Idle outlives its signed clock estimate,
+        # but has a 30-second TTL. Losing calibration drops it conservatively;
+        # the same live application session must still reconnect.
+        idle_before = {s: count(s, "IDLE:") for s in clients}
+        (root / "b.idle").touch()
+        wait_for(lambda: count("b", "IDLE:") > idle_before["b"])
+        seed(":91", "seed-request")
+        wait_for(lambda: count("b", "Peer event buffered while Idle") >= 1)
+        # Remove the source retry copy using ordinary Idle semantics, isolating
+        # maintenance of the receiver's buffered event through the long outage.
+        (root / "a.idle").touch()
+        wait_for(lambda: count("a", "IDLE:") > idle_before["a"])
+        stop_relay()
+        disconnected(1)
+        time.sleep(22)
+        assert all(p.poll() is None for p in clients.values()), "Stale calibration ended the session"
+        assert inspect(":92", "inspect-response"), "Idle clipboard changed during outage"
+        restart_relay()
+        resumed(1)
+        active_before = {s: count(s, "ACTIVE:") for s in clients}
+        for side in clients:
+            (root / f"{side}.idle").unlink()
+        wait_for(lambda: all(count(s, "ACTIVE:") > active_before[s] for s in clients))
+        time.sleep(0.3)
+        assert inspect(":92", "inspect-response"), "Uncertain-age candidate survived stale calibration"
+        seed(":91", "seed-request")  # A new eligible event in the same session.
+        wait_for(lambda: inspect(":92", "inspect-request"), 5)
+        wait_for(lambda: count("a", "Peer confirmed application.") == 2)
+        assert all(count(s, "Authenticated pilot connected.") == 1 for s in clients)
+        for side, process in clients.items():
+            (root / f"{side}.pause").touch()
+            assert process.wait(timeout=2) == 0
+        return 3, 0, 0
     # Local copies selected while offline keep their original creation time/TTL.
     stop_relay()
     disconnected(1)

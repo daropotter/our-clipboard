@@ -400,7 +400,9 @@ pub fn run(mode: &str) -> std::result::Result<String, &'static str> {
                         RESPONSE
                     })
                     .map_err(|_| Error::Worker)?;
-                thread::sleep(Duration::from_secs(15));
+                // Keep synthetic ownership through a 30-second quiet period and
+                // the long-outage reconnect regression; the fixture kills helpers.
+                thread::sleep(Duration::from_secs(90));
                 Ok(())
             }
             "check-display" => TextClipboard::new().map(|_| ()).map_err(|_| Error::Worker),
