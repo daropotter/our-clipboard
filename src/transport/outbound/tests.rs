@@ -326,3 +326,70 @@ fn preflight_checks_outer_trust_without_reserving_a_room() {
     let (left, right) = relay.pair(false);
     assert!(left.is_ok() && right.is_ok());
 }
+
+#[test]
+fn continuing_setup_observes_cancellation_and_deadline_without_weakening_pins() {
+    let h = Harness::new();
+    let a = RelayIdentity::generate().unwrap();
+    let b = RelayIdentity::generate().unwrap();
+    let bp = b.public_offer();
+    for cancelled in [true, false] {
+        let c = SetupControl {
+            until: if cancelled {
+                Instant::now() + Duration::from_secs(1)
+            } else {
+                Instant::now() - Duration::from_secs(1)
+            },
+            cancel: Arc::new(AtomicBool::new(cancelled)),
+            finished: Arc::new(AtomicBool::new(false)),
+        };
+        let result = connect_controlled(
+            &a,
+            RelayOptions {
+                url: &h.url,
+                room: Room([2; 32]),
+                side: Side::A,
+                token: &h.token,
+                peer: &bp,
+                outer: h.outer.clone(),
+            },
+            Some(&c),
+        );
+        assert!(matches!(
+            result,
+            Err(RelayError::Transport | RelayError::Timeout)
+        ));
+    }
+    let (left, right) = h.pair(false);
+    assert!(left.is_ok() && right.is_ok());
+}
+#[test]
+fn transport_loss_is_retryable_but_malformed_records_remain_terminal() {
+    assert_eq!(
+        peer_setup_error(io::ErrorKind::UnexpectedEof.into()),
+        RelayError::Transport
+    );
+    assert_eq!(
+        peer_setup_error(io::ErrorKind::TimedOut.into()),
+        RelayError::Timeout
+    );
+    assert_eq!(
+        peer_setup_error(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Malformed peer data"
+        )),
+        RelayError::PeerAuthentication
+    );
+    assert_eq!(
+        super::super::io_error(ws_error(tungstenite::Error::Protocol(
+            tungstenite::error::ProtocolError::ResetWithoutClosingHandshake
+        ))),
+        Error::Io
+    );
+    assert_eq!(
+        super::super::io_error(ws_error(tungstenite::Error::Capacity(
+            tungstenite::error::CapacityError::TooManyHeaders
+        ))),
+        Error::Frame
+    );
+}
