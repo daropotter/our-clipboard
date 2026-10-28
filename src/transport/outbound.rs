@@ -195,7 +195,10 @@ impl Network {
             .cancel
             .as_ref()
             .is_some_and(|c| c.load(Ordering::Relaxed))
+            || (self.setup_finished.is_some() && self.deadline.is_some_and(|d| Instant::now() >= d))
         {
+            // A controlled setup deadline is terminal. TimedOut is reserved for
+            // retryable socket polling in ByteStream/RelayReader.
             Err(io::ErrorKind::ConnectionAborted.into())
         } else {
             Ok(())

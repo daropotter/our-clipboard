@@ -477,3 +477,95 @@ fn controlled_missing_peer_times_out_without_blocking_for_the_normal_join_limit(
     assert!(matches!(result, Err(RelayError::Timeout)));
     assert!(start.elapsed() < Duration::from_secs(2));
 }
+
+#[test]
+fn controlled_application_hello_read_expires_when_peer_withholds_hello() {
+    let h = Harness::new();
+    let a = RelayIdentity::generate().unwrap();
+    let b = RelayIdentity::generate().unwrap();
+    let ap = a.public_offer();
+    let bp = b.public_offer();
+    let control = Arc::new(SetupControl {
+        until: Instant::now() + Duration::from_secs(1),
+        cancel: Arc::new(AtomicBool::new(false)),
+        finished: Arc::new(AtomicBool::new(false)),
+    });
+    let (url, token, outer, c) = (
+        h.url.clone(),
+        h.token.clone(),
+        h.outer.clone(),
+        control.clone(),
+    );
+    let left = thread::spawn(move || {
+        connect_controlled(
+            &a,
+            RelayOptions {
+                url: &url,
+                room: Room([6; 32]),
+                side: Side::A,
+                token: &token,
+                peer: &bp,
+                outer,
+            },
+            Some(&c),
+        )
+    });
+    let right = connect_controlled(
+        &b,
+        RelayOptions {
+            url: &h.url,
+            room: Room([6; 32]),
+            side: Side::B,
+            token: &h.token,
+            peer: &ap,
+            outer: h.outer.clone(),
+        },
+        Some(&control),
+    );
+    let (_, _, _left_guard) = left.join().unwrap().unwrap();
+    let (mut reader, _, right_guard) = right.unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let started = Instant::now();
+    thread::spawn(move || {
+        let mut hello = [0; 1];
+        tx.send(reader.read_exact(&mut hello).map_err(|e| e.kind()))
+            .unwrap();
+    });
+    let result = rx.recv_timeout(Duration::from_secs(2));
+    drop(right_guard); // Also unblock a regressed implementation before failing.
+    assert_eq!(result.unwrap(), Err(io::ErrorKind::ConnectionAborted));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(!control.finished.load(Ordering::Relaxed));
+}
+
+#[test]
+fn cancelling_blocked_wss_setup_io_returns_promptly() {
+    let h = Harness::new();
+    let control = SetupControl {
+        until: Instant::now() + Duration::from_secs(10),
+        cancel: Arc::new(AtomicBool::new(false)),
+        finished: Arc::new(AtomicBool::new(false)),
+    };
+    let cancel = control.cancel.clone();
+    // Wait for a TCP connection before cancelling, so preflight checks cannot
+    // satisfy this test without exercising Network I/O cancellation.
+    let (ws, guard) =
+        open_wss_controlled(&h.url, &h.token, h.outer.clone(), Some(&control)).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut ws = ws;
+        tx.send(ws.read(&mut [0; 1]).map(|_| ()).map_err(|e| e.kind()))
+            .unwrap();
+    });
+    thread::sleep(Duration::from_millis(100));
+    assert!(matches!(
+        rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    let start = Instant::now();
+    cancel.store(true, Ordering::Relaxed);
+    let result = rx.recv_timeout(Duration::from_secs(2));
+    drop(guard);
+    assert_eq!(result.unwrap(), Err(io::ErrorKind::ConnectionAborted));
+    assert!(start.elapsed() < Duration::from_secs(2));
+}
