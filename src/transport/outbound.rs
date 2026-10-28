@@ -552,7 +552,9 @@ fn open_wss_controlled(
                 .and_then(|e| e.downcast_ref::<rustls::Error>())
                 .is_none() =>
         {
-            if e.kind() == io::ErrorKind::TimedOut {
+            if e.kind() == io::ErrorKind::TimedOut
+                || control.is_some_and(|c| Instant::now() >= c.until)
+            {
                 RelayError::Timeout
             } else {
                 RelayError::Transport
@@ -614,7 +616,15 @@ pub(crate) fn connect_controlled(
     stream
         .ws
         .send(Message::Binary(join.into()))
-        .map_err(|_| RelayError::Transport)?;
+        .map_err(|error| {
+            if matches!(error, tungstenite::Error::Io(_))
+                && control.is_some_and(|c| Instant::now() >= c.until)
+            {
+                RelayError::Timeout
+            } else {
+                RelayError::Transport
+            }
+        })?;
     match stream.ws.get_mut() {
         MaybeTlsStream::Rustls(s) => {
             s.sock.deadline = Some(control.map_or(Instant::now() + PAIR_TIMEOUT, |c| {

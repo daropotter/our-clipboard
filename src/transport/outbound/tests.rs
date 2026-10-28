@@ -569,3 +569,28 @@ fn cancelling_blocked_wss_setup_io_returns_promptly() {
     assert_eq!(result.unwrap(), Err(io::ErrorKind::ConnectionAborted));
     assert!(start.elapsed() < Duration::from_secs(2));
 }
+
+#[test]
+fn controlled_outer_tls_deadline_is_a_timeout_not_an_auth_or_transport_failure() {
+    let h = Harness::new();
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let worker = thread::spawn(move || {
+        let (_socket, _) = listener.accept().unwrap();
+        // Accept TCP but withhold the outer TLS handshake past the setup budget.
+        thread::sleep(Duration::from_millis(300));
+    });
+    let control = SetupControl {
+        until: Instant::now() + Duration::from_millis(100),
+        cancel: Arc::new(AtomicBool::new(false)),
+        finished: Arc::new(AtomicBool::new(false)),
+    };
+    let result = open_wss_controlled(
+        &format!("wss://127.0.0.1:{}{PATH}", address.port()),
+        &h.token,
+        h.outer.clone(),
+        Some(&control),
+    );
+    assert!(matches!(result, Err(RelayError::Timeout)));
+    worker.join().unwrap();
+}
