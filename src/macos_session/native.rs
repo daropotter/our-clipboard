@@ -169,7 +169,11 @@ mod tests {
         ] {
             // SAFETY: the API copies one valid i64, with the same exact numeric type.
             let value = Owned::new(unsafe {
-                CFNumberCreate(std::ptr::null(), NUMBER_SINT64, (&input as *const i64).cast())
+                CFNumberCreate(
+                    std::ptr::null(),
+                    NUMBER_SINT64,
+                    (&input as *const i64).cast(),
+                )
             })
             .unwrap();
             assert_eq!(number(value.0), expected);
