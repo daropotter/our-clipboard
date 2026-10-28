@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "relay": "wss://relay.example/our-clipboard/v1",
+  "room": "1111111111111111111111111111111111111111111111111111111111111111",
+  "side": "b",
+  "identity_profile": "workstation",
+  "peer_name": "x11",
+  "offer": "mac.offer",
+  "peer_offer": "x11-for-mac.offer",
+  "max_drift_ppm": 1000,
+  "clock_granularity_ms": 1,
+  "seconds": 300,
+  "ttl_ms": 30000,
+  "reconnect": true,
+  "idle_file": "idle",
+  "pause_file": "pause"
+}

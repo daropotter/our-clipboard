@@ -481,15 +481,9 @@ fn open_wss(
 ) -> R<(ByteStream, RelayLifetime)> {
     open_wss_controlled(url, token, outer, None)
 }
-fn open_wss_controlled(
-    url: &str,
-    token: &AccessToken,
-    outer: Arc<ClientConfig>,
-    control: Option<&SetupControl>,
-) -> R<(ByteStream, RelayLifetime)> {
-    use std::net::ToSocketAddrs;
+fn relay_request(url: &str) -> R<tungstenite::http::Request<()>> {
     use tungstenite::client::IntoClientRequest;
-    let mut request = url
+    let request = url
         .into_client_request()
         .map_err(|_| RelayError::Configuration)?;
     let uri = request.uri();
@@ -499,6 +493,47 @@ fn open_wss_controlled(
     {
         return Err(RelayError::Configuration);
     }
+    if url.contains('#') {
+        return Err(RelayError::Configuration);
+    }
+    let authority = request.uri().authority().ok_or(RelayError::Configuration)?;
+    let suffix = authority
+        .as_str()
+        .strip_prefix(authority.host())
+        .ok_or(RelayError::Configuration)?;
+    if !suffix.is_empty() {
+        let port = suffix.strip_prefix(':').ok_or(RelayError::Configuration)?;
+        if port.is_empty()
+            || !port.bytes().all(|b| b.is_ascii_digit())
+            || port.parse::<u16>().ok().is_none_or(|n| n == 0)
+        {
+            return Err(RelayError::Configuration);
+        }
+    }
+    let host = request
+        .uri()
+        .host()
+        .ok_or(RelayError::Configuration)?
+        .trim_matches(['[', ']']);
+    rustls::pki_types::ServerName::try_from(host.to_owned())
+        .map_err(|_| RelayError::Configuration)?;
+    Ok(request)
+}
+/// Static address validation only: no DNS, socket, credential or clipboard access.
+#[cfg(feature = "clipboard")]
+pub(crate) fn validate_relay_address(url: &str) -> R<()> {
+    relay_request(url).map(|_| ())
+}
+
+fn open_wss_controlled(
+    url: &str,
+    token: &AccessToken,
+    outer: Arc<ClientConfig>,
+    control: Option<&SetupControl>,
+) -> R<(ByteStream, RelayLifetime)> {
+    use std::net::ToSocketAddrs;
+    let mut request = relay_request(url)?;
+    let uri = request.uri();
     let host = uri
         .host()
         .ok_or(RelayError::Configuration)?

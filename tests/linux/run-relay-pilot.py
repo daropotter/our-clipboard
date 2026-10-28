@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real WSS + inner mutual TLS + native clipboards; no host ports/credentials/SSH."""
 import hashlib
+import json
 import os
 from pathlib import Path
 import secrets
@@ -14,10 +15,13 @@ import time
 binary, helper = sys.argv[1:3]
 logind_fixture = sys.argv[3] if len(sys.argv) > 3 else None
 reconnect_mode = os.environ.get("OUR_CLIPBOARD_TEST_RECONNECT", "")
+launch_config = os.environ.get("OUR_CLIPBOARD_TEST_LAUNCH_CONFIG") == "1"
 named_peers = os.environ.get("OUR_CLIPBOARD_TEST_NAMED_PEERS") == "1"
 enroll_peers = os.environ.get("OUR_CLIPBOARD_TEST_ENROLL_PEERS") == "1"
 signed_offers = os.environ.get("OUR_CLIPBOARD_TEST_SIGNED_OFFERS") == "1"
 external = os.environ.get("OUR_CLIPBOARD_EXTERNAL_RELAY") == "1"
+if launch_config and not named_peers:
+    raise SystemExit("Launch fixture requires explicitly approved named peers")
 if (named_peers or enroll_peers) and not signed_offers:
     raise SystemExit("Named peer fixture requires signed offers")
 if signed_offers and external:
@@ -189,6 +193,23 @@ with tempfile.TemporaryDirectory() as directory:
                 args.append("--reconnect")
             if logind_fixture:
                 args.append("--logind-idle")
+            if launch_config:
+                settings = {
+                    "version": 1, "relay": f"wss://localhost:{relay_port}/our-clipboard/v1",
+                    "room": room, "side": side, "identity_profile": "pilot-" + side, "peer_name": "remote",
+                    "offer": f"{side}.offer", "peer_offer": f"{peer}-for-{side}.offer", "relay_ca": "relay.pem",
+                    "idle_file": f"{side}.idle", "pause_file": f"{side}.pause", "seconds": 30,
+                    "ttl_ms": 3000, "max_drift_ppm": 1000, "clock_granularity_ms": 1,
+                    "reconnect": bool(reconnect_mode),
+                }
+                launch = root / f"{side}.json"
+                launch.write_text(json.dumps(settings))
+                launch.chmod(0o600)
+                checked = subprocess.run([binary, "pilot", "config-check", "--file", str(launch)],
+                                         env=env, capture_output=True, timeout=5)
+                assert checked.returncode == 0 and b"No credentials" in checked.stdout, "Launch static validation failed"
+                # The fixture cwd is /tmp, not the configuration's temporary directory.
+                args = args[:args.index("pilot") + 1] + ["--config", str(launch), "--replace-clipboard"]
             clients[side] = spawn(args, env=dict(system_env.get(side, env), DISPLAY=display),
                                   stdin=subprocess.PIPE, log=root / f"{side}.log")
         wait_for(lambda: offer_ready(root / "a.offer") and offer_ready(root / "b.offer"))
@@ -321,6 +342,8 @@ with tempfile.TemporaryDirectory() as directory:
         if enroll_peers:
             from peer_pin_scenario import enroll
             enroll(root, binary, env, room, device_fingerprints)
+        if launch_config:
+            print("Launch configuration passed: relative paths, separate consent and selected peer, real WSS reconnect")
         if named_peers:
             for side in clients:
                 assert "SAVED PEER VERIFIED:" in status(root / f"{side}.log"), "No explicit pin verification"

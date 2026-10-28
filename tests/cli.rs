@@ -455,3 +455,92 @@ fn peer_commands_require_explicit_context_before_opening_any_store() {
         assert!(output.stdout.is_empty());
     }
 }
+
+#[cfg(feature = "clipboard")]
+#[test]
+fn launch_check_is_read_only_and_runtime_consent_cannot_come_from_json() {
+    let config_dir = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let path = config_dir.path().join("launch.json");
+    let settings = serde_json::json!({
+        "version": 1, "relay": "wss://relay.invalid/our-clipboard/v1", "room": "1".repeat(64),
+        "side": "a", "identity_profile": "not-initialized", "peer_name": "not-approved",
+        "offer": "own.offer", "peer_offer": "peer.offer", "max_drift_ppm": 1000, "clock_granularity_ms": 1,
+    });
+    let save = |value: &serde_json::Value| {
+        std::fs::write(&path, value.to_string()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    };
+    save(&settings);
+    let call = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
+            .args(args)
+            .current_dir(elsewhere.path())
+            .env_remove("OUR_CLIPBOARD_RELAY_TOKEN")
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("WAYLAND_SOCKET")
+            .env(
+                "DBUS_SESSION_BUS_ADDRESS",
+                "unix:path=/nonexistent-our-clipboard-bus",
+            )
+            .env(
+                "OUR_CLIPBOARD_CONFIG_DIR",
+                config_dir.path().join("unused-identities"),
+            )
+            .output()
+            .unwrap()
+    };
+    let checked = call(&["pilot", "config-check", "--file", path.to_str().unwrap()]);
+    assert!(checked.status.success());
+    assert!(
+        String::from_utf8(checked.stdout)
+            .unwrap()
+            .contains("No credentials")
+    );
+    let missing_consent = call(&["pilot", "--config", path.to_str().unwrap()]);
+    assert_eq!(missing_consent.status.code(), Some(2));
+    assert!(
+        String::from_utf8(missing_consent.stderr)
+            .unwrap()
+            .contains("explicit --replace-clipboard")
+    );
+    for field in ["replace_clipboard", "token"] {
+        let mut invalid = settings.clone();
+        invalid[field] = serde_json::json!("SECRET-OR-CONSENT-MUST-NOT-APPEAR");
+        save(&invalid);
+        let rejected = call(&[
+            "pilot",
+            "--config",
+            path.to_str().unwrap(),
+            "--replace-clipboard",
+        ]);
+        assert_eq!(rejected.status.code(), Some(2));
+        assert!(
+            !String::from_utf8(rejected.stderr)
+                .unwrap()
+                .contains("SECRET-OR-CONSENT-MUST-NOT-APPEAR")
+        );
+    }
+    let mut paused_settings = settings.clone();
+    paused_settings["pause_file"] = serde_json::json!("pause");
+    save(&paused_settings);
+    std::fs::write(config_dir.path().join("pause"), []).unwrap();
+    let paused = call(&[
+        "pilot",
+        "--config",
+        path.to_str().unwrap(),
+        "--replace-clipboard",
+    ]);
+    assert!(paused.status.success());
+    assert!(String::from_utf8(paused.stdout).unwrap().contains("PAUSED"));
+    for root in [config_dir.path(), elsewhere.path()] {
+        assert!(!root.join("own.offer").exists());
+        assert!(!root.join("peer.offer").exists());
+    }
+    assert!(!config_dir.path().join("unused-identities").exists());
+}

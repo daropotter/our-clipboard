@@ -1,0 +1,94 @@
+# Local relay launch settings
+
+A client build can run the signed, explicitly approved-peer relay pilot from a
+versioned JSON file. This reduces command-line repetition; it does not implement
+a daemon, saved clipboard consent, discovery or a new pairing protocol.
+
+Copy the [X11 example](examples/pilot-x11.json) and
+[macOS example](examples/pilot-mac.json) into separate per-run working directories
+on their respective computers. Edit each copy before use:
+
+- Set the manually chosen WSS relay and the same nonzero 64-hex routing room on both.
+  The sample hostname is reserved; it is not a hosted service. The sample room is
+  public routing metadata, not a password or proof of trust.
+- Select the already initialized local identity profile and explicitly approved
+  peer name. Follow [peer trust](PEER-TRUST.md) first; this file cannot approve,
+  repair or replace trust.
+- Choose fresh own/received offer filenames for this run. Both still exchange
+  fresh signed public offers through the chosen file-transfer channel. Existing
+  own offer files are never overwritten or removed automatically.
+
+On Unix protect the launch file with `chmod 600 FILE`. It must belong to the
+current user and must not be group/world-writable. Use an account-private local
+directory on Windows and all other platforms. Treat launch settings and their
+parent directories as trusted local configuration: they select the destination
+peer/relay and local controls. They are not authenticated membership manifests or
+protected against a malicious same-account/administrator change or rollback.
+Symlink/non-regular configuration files are rejected. No permissions are repaired.
+
+Check a file without starting a session:
+
+```sh
+our-clipboard pilot config-check --file /path/to/run/x11.json
+```
+
+This only reads/validates configuration schema and argument consistency. It does
+not access the credential service, resolve/contact a relay, initialize clipboard
+backends, publish/consume offers or change controls. It does not certify saved
+trust, fresh output filenames, CA certificates, native/platform readiness or
+end-to-end delivery. It works without a graphical session in a client build;
+`--no-default-features` server builds omit this client command/JSON dependency.
+
+Start explicitly:
+
+```sh
+our-clipboard pilot --config /path/to/run/x11.json --replace-clipboard
+```
+
+The reverse order of these two options also works. `--replace-clipboard` must be
+in the actual invocation; it is never saved in JSON. Config mode accepts only
+those two options, without overrides, extra flags or recursive includes. Edit the
+file to change settings, or use the existing direct command-line mode instead.
+Settings are read once at startup; edits affect a new invocation, not an active
+session. Existing marker-file controls still act dynamically. No TLS key,
+application session or buffered clipboard state is saved in the launch file.
+The ordinary pilot startup/quiet period, Idle/Pause, peer verification and signed
+application ACK rules remain unchanged. Wait for both READY statuses before copying.
+
+## Schema version 1
+
+The JSON object requires `version: 1`, `relay`, `room`, `side`, `identity_profile`,
+`peer_name`, `offer`, `peer_offer`, `max_drift_ppm` and `clock_granularity_ms`.
+Only signed mode with an explicitly selected peer approval is supported by launch
+files. The existing ephemeral/interactive/SSH command-line modes remain available
+separately; configuration files cannot select them.
+
+Optional fields are `seconds` (default 300), `ttl_ms` (default 30000), `relay_ca`,
+`idle_file`, `pause_file`, `reconnect`, `logind_idle` and `macos_session_idle`.
+Optional booleans default to false. Numeric bounds and duration-versus-quiet-period
+checks are shared with the existing CLI. Native observation flags retain their
+existing OS/schema/physical-validation restrictions; a static check does not test
+those capabilities.
+
+Paths resolve relative to the launch file's directory, never the invocation's
+working directory. Parent directories must already exist; none are created by
+validation. Absolute paths also work; Windows drive-relative paths are rejected.
+Offer paths resolving to the same parent/filename are rejected. Values are local
+platform paths; use the appropriate path syntax on each computer. The identity
+configuration root still comes from the existing OS location or explicit
+`OUR_CLIPBOARD_CONFIG_DIR` environment override, not from this file.
+
+The parser rejects files above 64 KiB, malformed JSON, duplicate/unknown fields,
+unsupported versions, wrong types and invalid path/profile/peer values. Errors
+are static and never echo a rejected field/value or JSON body. There is no token,
+private-key, clipboard-text, `replace_clipboard`, shell, environment expansion or
+command field. URLs cannot contain user credentials, query strings or fragments.
+Keep `OUR_CLIPBOARD_RELAY_TOKEN` in its authorized environment/secret channel;
+never put credentials anywhere in a launch file, URL, command argument or repo.
+
+Both clients remain outbound-only; the existing relay/stage needs no update.
+The private CI fixture checks launch files from a different working directory,
+real WSS/native clipboard delivery, saved peer verification with closed stdin,
+relay outages, original-TTL expiry and Pause. Rejected fields/no CLI consent and
+read-only checking are covered separately. Physical X11↔macOS launch-file testing
+remains manual in addition to existing native adapter/store CI.

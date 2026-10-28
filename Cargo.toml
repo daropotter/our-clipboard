@@ -8,10 +8,12 @@ repository = "https://github.com/daropotter/our-clipboard"
 
 [features]
 default = ["clipboard", "os-keyring"]
-clipboard = ["dep:arboard", "dep:clipboard-rs", "dep:wayland-client", "dep:wayland-protocols", "dep:wayland-protocols-wlr", "dep:wl-clipboard-rs", "dep:x11rb", "dep:zbus", "dep:clipboard-win", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation"]
+clipboard = ["dep:serde", "dep:serde_json", "dep:arboard", "dep:clipboard-rs", "dep:wayland-client", "dep:wayland-protocols", "dep:wayland-protocols-wlr", "dep:wl-clipboard-rs", "dep:x11rb", "dep:zbus", "dep:clipboard-win", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation"]
 os-keyring = ["dep:keyring"]
 
 [dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
 arboard = { version = "3.7.0", default-features = false, optional = true }
 directories = "6"
 getrandom = "0.3"

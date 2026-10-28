@@ -28,6 +28,11 @@ Optional `--identity-profile PROFILE` signs fresh offers with an explicitly init
 system-store identity, giving the device a stable fingerprint; both sides must use
 signed mode and independently confirm that fingerprint on every run.
 
+For repeated supervised runs, [local launch settings](docs/PILOT-CONFIG.md) provide
+`pilot --config FILE --replace-clipboard` and read-only `pilot config-check`.
+They contain no credentials or saved clipboard consent and require an already
+approved signed peer. Fresh offer exchange is still required.
+
 ## Direction
 
 - Plain text first, including Unicode and multiple lines.
