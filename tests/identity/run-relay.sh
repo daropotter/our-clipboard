@@ -22,4 +22,4 @@ export OUR_CLIPBOARD_TEST_SIGNED_OFFERS=1
 OUR_CLIPBOARD_TEST_ENROLL_PEERS=1 python3 /run-relay-pilot.py "$1" "$2"
 # A second pair of processes reloads the same profiles, uses fresh public offers,
 # then survives actual relay outages in the same live session.
-OUR_CLIPBOARD_TEST_NAMED_PEERS=1 OUR_CLIPBOARD_TEST_RECONNECT=1 python3 /run-relay-pilot.py "$1" "$2"
+OUR_CLIPBOARD_TEST_LAUNCH_CONFIG=1 OUR_CLIPBOARD_TEST_NAMED_PEERS=1 OUR_CLIPBOARD_TEST_RECONNECT=1 python3 /run-relay-pilot.py "$1" "$2"

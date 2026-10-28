@@ -92,6 +92,10 @@ runs a TLS listening service. For a private relay CA, explicitly add
 `--relay-ca /path/to/public-ca.pem` on both computers; hostname verification stays
 active. There is no insecure certificate-bypass flag or SSH fallback.
 
+For repeated signed runs with an explicitly approved peer, use the optional
+[local launch settings](PILOT-CONFIG.md). Secrets stay in the environment and
+clipboard consent remains an explicit flag on every invocation.
+
 ## Confirm identities independently
 
 Each process creates a public `.offer` file and displays its **OWN** fingerprint.
