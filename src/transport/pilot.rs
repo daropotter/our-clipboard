@@ -1,6 +1,7 @@
 //! Supervised two-machine pilot over pinned WSS or pretrusted SSH. No OS Idle hooks.
 mod config;
 mod link;
+mod preflight;
 use super::outbound::{
     self, AccessToken, PublicOffer, RelayIdentity, Room, Side, SignedRelayOffer,
 };
@@ -992,15 +993,7 @@ fn protocol_stdout() -> std::result::Result<std::fs::File, &'static str> {
 fn protocol_stdout() -> std::result::Result<std::fs::File, &'static str> {
     Err("This SSH pilot currently supports Linux and macOS endpoints.")
 }
-pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
-    if matches!(args,[arg] if arg=="--help"||arg=="-h") {
-        return Ok("Usage: our-clipboard pilot --config FILE --replace-clipboard\n       our-clipboard pilot config-check --file FILE\nOr: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nOptional --identity-profile PROFILE uses an explicitly initialized system-store identity to sign fresh offers; BOTH sides must use signed mode and confirm device fingerprints. Optional --peer-name NAME selects an existing local peer approval and verifies the signed offer without a prompt; requires --identity-profile. Missing/corrupt/changed trust stops, never enrolls or replaces. Optional --reconnect retries transport loss within the same live authenticated session, without renewing TTL. Relay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. Optional --macos-session-idle observes the macOS caller/console state (experimental registry schema; unknown/stale means Idle). Optional --logind-idle observes the Linux/X11 logind session (unknown/stale means Idle). Optional --idle-file FILE pauses while the marker exists; metadata errors stop the pilot. This injects Idle state, not automatic screen-lock detection. Optional --pause-file FILE ends the session and discards pending text when present; resuming requires fresh pilots/offers. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
-    }
-    if let Some(result) = config::check_command(args) {
-        return result;
-    }
-    let expanded = config::expand(args)?;
-    let o = options(expanded.as_deref().unwrap_or(args))?;
+fn platform_options(o: &Options) -> std::result::Result<(), &'static str> {
     #[cfg(not(target_os = "macos"))]
     if o.macos_session_idle {
         return Err("--macos-session-idle requires macOS; no fallback is enabled.");
@@ -1011,6 +1004,22 @@ pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
             "--logind-idle requires Linux/X11 with systemd-logind; no fallback is enabled.",
         );
     }
+    let _ = o;
+    Ok(())
+}
+pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
+    if matches!(args,[arg] if arg=="--help"||arg=="-h") {
+        return Ok("Usage: our-clipboard pilot --config FILE --replace-clipboard\n       our-clipboard pilot config-check --file FILE\n       our-clipboard pilot preflight --file FILE\nOr: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nOptional --identity-profile PROFILE uses an explicitly initialized system-store identity to sign fresh offers; BOTH sides must use signed mode and confirm device fingerprints. Optional --peer-name NAME selects an existing local peer approval and verifies the signed offer without a prompt; requires --identity-profile. Missing/corrupt/changed trust stops, never enrolls or replaces. Optional --reconnect retries transport loss within the same live authenticated session, without renewing TTL. Relay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. Optional --macos-session-idle observes the macOS caller/console state (experimental registry schema; unknown/stale means Idle). Optional --logind-idle observes the Linux/X11 logind session (unknown/stale means Idle). Optional --idle-file FILE pauses while the marker exists; metadata errors stop the pilot. This injects Idle state, not automatic screen-lock detection. Optional --pause-file FILE ends the session and discards pending text when present; resuming requires fresh pilots/offers. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
+    }
+    if let Some(result) = preflight::command(args) {
+        return result;
+    }
+    if let Some(result) = config::check_command(args) {
+        return result;
+    }
+    let expanded = config::expand(args)?;
+    let o = options(expanded.as_deref().unwrap_or(args))?;
+    platform_options(&o)?;
     if idle_requested(o.pause_file.as_deref())
         .map_err(|_| "Pause marker unavailable; pilot not started.")?
     {

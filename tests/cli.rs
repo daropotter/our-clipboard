@@ -502,6 +502,24 @@ fn launch_check_is_read_only_and_runtime_consent_cannot_come_from_json() {
             .unwrap()
             .contains("No credentials")
     );
+    let preflight = call(&["pilot", "preflight", "--file", path.to_str().unwrap()]);
+    assert_eq!(preflight.status.code(), Some(2));
+    assert!(
+        String::from_utf8(preflight.stderr)
+            .unwrap()
+            .contains("Relay credential missing or invalid")
+    );
+    let existing_offer = config_dir.path().join("own.offer");
+    std::fs::write(&existing_offer, b"unchanged").unwrap();
+    let blocked = call(&["pilot", "preflight", "--file", path.to_str().unwrap()]);
+    assert_eq!(blocked.status.code(), Some(2));
+    assert!(
+        String::from_utf8(blocked.stderr)
+            .unwrap()
+            .contains("Own public offer path already exists")
+    );
+    assert_eq!(std::fs::read(&existing_offer).unwrap(), b"unchanged");
+    std::fs::remove_file(existing_offer).unwrap();
     let missing_consent = call(&["pilot", "--config", path.to_str().unwrap()]);
     assert_eq!(missing_consent.status.code(), Some(2));
     assert!(
@@ -538,6 +556,13 @@ fn launch_check_is_read_only_and_runtime_consent_cannot_come_from_json() {
     ]);
     assert!(paused.status.success());
     assert!(String::from_utf8(paused.stdout).unwrap().contains("PAUSED"));
+    let paused_preflight = call(&["pilot", "preflight", "--file", path.to_str().unwrap()]);
+    assert!(paused_preflight.status.success());
+    assert!(
+        String::from_utf8(paused_preflight.stdout)
+            .unwrap()
+            .contains("PAUSED")
+    );
     for root in [config_dir.path(), elsewhere.path()] {
         assert!(!root.join("own.offer").exists());
         assert!(!root.join("peer.offer").exists());

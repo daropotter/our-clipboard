@@ -30,7 +30,9 @@ signed mode and independently confirm that fingerprint on every run.
 
 For repeated supervised runs, [local launch settings](docs/PILOT-CONFIG.md) provide
 `pilot --config FILE --replace-clipboard` and read-only `pilot config-check`.
-They contain no credentials or saved clipboard consent and require an already
+`pilot preflight --file FILE` additionally checks existing local identity/trust,
+credential format and paths, without contacting a relay or accessing the clipboard.
+Launch files contain no credentials or saved clipboard consent and require an already
 approved signed peer. Fresh offer exchange is still required.
 
 ## Direction

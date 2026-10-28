@@ -92,3 +92,38 @@ real WSS/native clipboard delivery, saved peer verification with closed stdin,
 relay outages, original-TTL expiry and Pause. Rejected fields/no CLI consent and
 read-only checking are covered separately. Physical X11↔macOS launch-file testing
 remains manual in addition to existing native adapter/store CI.
+
+## Local identity/trust preflight
+
+After static checking, explicitly check local launch prerequisites:
+
+```sh
+our-clipboard pilot preflight --file /path/to/run/x11.json
+```
+
+Unlike `config-check`, this may access/unlock the OS credential service. It checks
+platform-specific option compatibility, local Pause/Idle marker metadata, that the
+own offer path is unused, the environment credential's format, configured CA
+parsing, the existing local identity/public pin and the selected owner-signed peer
+approval. A configured Pause marker returns PAUSED before credential/trust access.
+The command never initializes identities, repairs metadata, creates offers,
+changes controls, opens clipboard backends, resolves/connects to a relay or starts
+a listener. Unix credential-service IPC may occur; no relay authentication request
+is sent. Filesystem reads assume trusted local storage and can still block.
+
+A successful `LOCAL PREFLIGHT PASSED` reports public local/peer fingerprints and
+the local marker state. It is a snapshot, **not READY** or a guarantee that a later
+launch will succeed: credential validity at the server, relay/peer reachability,
+TLS handshake/current peer session, received offers, native clipboard permissions,
+actual native lock/suspend state and signed delivery are not tested. In particular,
+the peer offer is neither read nor consumed. Use `relay-check` separately for an
+explicit network-only check, and wait for both READY statuses after actual launch.
+Native session-observation polling/schema limits still apply.
+
+Only existing profile/approval metadata is opened under the existing advisory
+profile lock. Missing profile directories or lock files are not created by
+preflight, `identity show` or peer reads. If identity metadata needs recovery,
+run `identity init` explicitly under its existing fail-closed rules; no replacement
+identity/key is generated merely to make a check pass. The command has no
+`--replace-clipboard` option and stores no clipboard consent. A later launch still
+requires the explicit flag in its own invocation.

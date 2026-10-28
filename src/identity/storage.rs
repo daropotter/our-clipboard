@@ -26,44 +26,63 @@ fn validate_profile(profile: &str) -> Result<(), IdentityError> {
     }
 }
 pub(super) fn lock(root: &Path, profile: &str) -> Result<(File, PathBuf), IdentityError> {
+    lock_profile(root, profile, true)
+}
+pub(super) fn lock_existing(root: &Path, profile: &str) -> Result<(File, PathBuf), IdentityError> {
+    lock_profile(root, profile, false)
+}
+fn lock_profile(
+    root: &Path,
+    profile: &str,
+    create: bool,
+) -> Result<(File, PathBuf), IdentityError> {
     validate_profile(profile)?;
     let directory = root.join(profile);
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
+    if create {
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder
+            .create(&directory)
+            .map_err(|_| IdentityError::Configuration)?;
     }
-    builder
-        .create(&directory)
-        .map_err(|_| IdentityError::Configuration)?;
-    if fs::symlink_metadata(&directory)
-        .map_err(|_| IdentityError::Configuration)?
-        .file_type()
-        .is_symlink()
-    {
+    let directory_meta = fs::symlink_metadata(&directory).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            IdentityError::Missing
+        } else {
+            IdentityError::Configuration
+        }
+    })?;
+    if !directory_meta.file_type().is_dir() || directory_meta.file_type().is_symlink() {
         return Err(IdentityError::Configuration);
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if fs::metadata(&directory)
-            .map_err(|_| IdentityError::Configuration)?
-            .permissions()
-            .mode()
-            & 0o077
-            != 0
-        {
+        if directory_meta.permissions().mode() & 0o077 != 0 {
             return Err(IdentityError::Configuration);
         }
     }
     let path = directory.join("identity.lock");
-    if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
-        return Err(IdentityError::Configuration);
+    match fs::symlink_metadata(&path) {
+        Ok(meta) if !meta.file_type().is_file() || meta.file_type().is_symlink() => {
+            return Err(IdentityError::Configuration);
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && create => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(IdentityError::Missing),
+        Err(_) => return Err(IdentityError::Configuration),
     }
     let mut options = OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
+    options
+        .read(true)
+        .write(true)
+        .create(create)
+        .truncate(false);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -128,7 +147,11 @@ fn load(
     profile: &str,
     initialize: bool,
 ) -> Result<DeviceIdentity, IdentityError> {
-    let (_guard, path) = lock(root, profile)?;
+    let (_guard, path) = if initialize {
+        lock(root, profile)?
+    } else {
+        lock_existing(root, profile)?
+    };
     let pin = read_pin(&path)?;
     if let Some(secret) = store.load()? {
         let identity = stored_identity(&secret)?;
@@ -255,6 +278,7 @@ mod tests {
             Err(IdentityError::Missing)
         ));
         assert_eq!(store.writes.get(), 0);
+        assert!(!root.path().join("pilot").exists());
         assert!(!root.path().join("pilot/device.pub").exists());
         let initialized = tempfile::tempdir().unwrap();
         load(&store, initialized.path(), "pilot", true).unwrap();
@@ -264,6 +288,25 @@ mod tests {
         ));
         assert_eq!(store.writes.get(), 1);
         assert!(!root.path().join("pilot/device.pub").exists());
+    }
+    #[test]
+    fn reopening_does_not_repair_a_missing_lock_but_explicit_init_can() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Memory::default();
+        let original = load(&store, root.path(), "pilot", true).unwrap().id();
+        let path = root.path().join("pilot/identity.lock");
+        std::fs::remove_file(&path).unwrap();
+        assert!(matches!(
+            load(&store, root.path(), "pilot", false),
+            Err(IdentityError::Missing)
+        ));
+        assert!(!path.exists());
+        assert_eq!(
+            load(&store, root.path(), "pilot", true).unwrap().id(),
+            original
+        );
+        assert!(path.exists());
+        assert_eq!(store.writes.get(), 1);
     }
     #[test]
     fn initializes_once_and_reloads_the_same_identity() {

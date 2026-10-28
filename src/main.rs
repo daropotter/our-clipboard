@@ -59,7 +59,7 @@ fn help() -> String {
         text.push_str("\n  doctor --session  Read macOS session state without clipboard access");
     }
     if cfg!(feature = "clipboard") {
-        text.push_str("\n  pilot --config FILE --replace-clipboard  Run trusted launch settings\n  pilot config-check --file FILE           Validate settings without starting a pilot");
+        text.push_str("\n  pilot --config FILE --replace-clipboard  Run trusted launch settings\n  pilot config-check --file FILE           Validate settings without starting a pilot\n  pilot preflight --file FILE              Check local credentials/trust without transport or clipboard");
     }
     if cfg!(feature = "os-keyring") {
         text.push_str("\n\nIdentity (system credential store):\n  identity init [--profile name]\n  identity show [--profile name]\n  peer --help    Explicit local peer trust/show commands");
