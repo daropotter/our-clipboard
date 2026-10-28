@@ -5,7 +5,13 @@ use ring::{
 };
 use zeroize::Zeroizing;
 #[cfg(any(feature = "os-keyring", test))]
+mod peers;
+#[cfg(any(feature = "os-keyring", test))]
 mod storage;
+#[cfg(any(feature = "os-keyring", test))]
+pub use peers::{PeerPinError, validate_peer_name};
+#[cfg(feature = "os-keyring")]
+pub use peers::{load_peer, remember_peer};
 #[cfg(feature = "os-keyring")]
 pub use storage::{manage, open_existing};
 

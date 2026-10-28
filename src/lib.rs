@@ -11,6 +11,8 @@ mod logind;
 mod macos_session;
 #[cfg(feature = "clipboard")]
 mod origin;
+#[cfg(feature = "os-keyring")]
+pub mod peer_trust;
 pub mod receipts;
 #[cfg(feature = "clipboard")]
 pub mod session;
