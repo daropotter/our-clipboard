@@ -387,3 +387,55 @@ fn macos_session_diagnostics_never_claim_clipboard_delivery() {
         assert!(output.stdout.is_empty());
     }
 }
+
+#[cfg(all(feature = "clipboard", target_os = "linux"))]
+#[test]
+fn signed_pilot_never_creates_an_offer_or_falls_back_when_identity_store_is_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("own.offer");
+    let output = Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
+        .args([
+            "pilot",
+            "--replace-clipboard",
+            "--relay",
+            "wss://localhost/our-clipboard/v1",
+            "--room",
+            &"1".repeat(64),
+            "--side",
+            "a",
+            "--offer",
+            own.to_str().unwrap(),
+            "--peer-offer",
+            dir.path().join("peer.offer").to_str().unwrap(),
+            "--max-drift-ppm",
+            "1000",
+            "--clock-granularity-ms",
+            "1",
+            "--identity-profile",
+            "missing",
+        ])
+        .env("OUR_CLIPBOARD_RELAY_TOKEN", "a".repeat(64))
+        .env("OUR_CLIPBOARD_CONFIG_DIR", dir.path())
+        .env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            format!("unix:path={}", dir.path().join("no-bus").display()),
+        )
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("WAYLAND_SOCKET")
+        .env("XDG_SESSION_TYPE", "x11")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(!own.exists());
+    assert!(!dir.path().join("missing/device.pub").exists());
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    #[cfg(feature = "os-keyring")]
+    assert!(
+        diagnostic.contains("credential store unavailable")
+            || diagnostic.contains("Identity is missing")
+    );
+    #[cfg(not(feature = "os-keyring"))]
+    assert!(diagnostic.contains("no ephemeral fallback"));
+}

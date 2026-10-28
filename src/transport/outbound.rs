@@ -1,6 +1,8 @@
 //! Both endpoints connect outward to WSS; a second, pinned mutual TLS session protects content.
 use super::*;
+mod signed_offer;
 use rustls::pki_types::pem::PemObject;
+pub use signed_offer::SignedRelayOffer;
 use std::{
     collections::HashMap,
     io,

@@ -7,7 +7,7 @@ use zeroize::Zeroizing;
 #[cfg(any(feature = "os-keyring", test))]
 mod storage;
 #[cfg(feature = "os-keyring")]
-pub use storage::manage;
+pub use storage::{manage, open_existing};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdentityError {

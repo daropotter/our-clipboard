@@ -24,6 +24,9 @@ session observation is opt-in: `--logind-idle` on Linux/X11 and
 `--macos-session-idle` on macOS. See the native-schema/locker/polling limits
 and physical-validation requirements in the guide. Both relay pilots can opt into
 `--reconnect` to recover the same live session without renewing text TTL.
+Optional `--identity-profile PROFILE` signs fresh offers with an explicitly initialized
+system-store identity, giving the device a stable fingerprint; both sides must use
+signed mode and independently confirm that fingerprint on every run.
 
 ## Direction
 
@@ -300,8 +303,11 @@ No service means an explicit error. `--no-default-features` alone omits the syst
 keyring integration. Tests use unique ephemeral credentials on Windows/macOS and
 an encrypted, unlocked test collection on a private Linux Secret Service bus;
 the host keyring is not touched by the container test. The synthetic transport
-fixtures still use ephemeral test identities; persistent signing identity is not
-connected to a production pairing/client protocol yet.
+fixtures use ephemeral test identities. Relay pilots can explicitly use an initialized
+profile with `--identity-profile PROFILE`; see the [signed-offer guide](docs/OUTBOUND-PILOT.md#optional-stable-device-identity-signed-offers).
+This links persistent identity to the supervised pilot, with fresh TLS/session keys
+and explicit device-fingerprint confirmations. Saved peer trust, production group
+enrollment and six-digit code pairing remain under development.
 
 ## Signed text event prototype
 

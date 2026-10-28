@@ -113,6 +113,60 @@ should join the same relay room within two minutes. Old offers cannot be reused
 with a restarted process: start fresh processes and exchange new offers.
 This is manual test enrollment, not the final pairing-code protocol.
 
+## Optional stable device identity (signed offers)
+
+The default pilot still uses ephemeral identities. To give each computer a stable
+public fingerprint, explicitly initialize a local profile on **each** machine:
+
+```sh
+our-clipboard identity init --profile workstation
+our-clipboard identity show --profile workstation
+```
+
+Add `--identity-profile workstation` to both relay pilot commands above. Profile
+names are local and can differ between machines. This requires the default
+`os-keyring` feature and an available/unlocked platform credential service. The
+pilot only opens an existing identity: it never creates a replacement key, repairs
+a missing public pin, exports private keys or falls back to an ephemeral identity.
+Use `identity init` explicitly for initial creation/recovery under the existing
+identity-store rules. No key or peer credential belongs in a public repository.
+
+In this mode the `.offer` file contains public data signed by the persistent
+Ed25519 device key. The domain-separated, versioned signature binds that key to
+the fresh TLS certificate, fresh application session, exact relay room and side.
+The peer validates the whole signature/context before the confirmation prompt,
+then requires the initial authenticated application hello to match that signed
+public key **and** session. Unsigned legacy offers, a wrong room/role, modified
+fields and mixed modes are rejected, with no downgrade fallback.
+
+Exchange the fresh files as before, but compare/enter the full
+`ed25519-sha256-v1:...` **device fingerprint** on both computers. It must match the
+other computer's `identity show` output. It stays the same across process restarts;
+the public offer, application session and TLS key deliberately change. Comparing
+only a self-signed file does not establish trust: use an independent trusted
+channel, and investigate a changed device fingerprint before continuing.
+
+Every run still requires explicit confirmation and fresh offers. Successful
+confirmation does not save peer trust, create group membership, grant invitation
+rights or implement the final six-digit pairing-code protocol. Initial new-session
+quiet periods and original-TTL/Idle/Pause/ACK rules are unchanged. `--reconnect`
+can be combined with signed offers; it resumes only the same live session, not a
+process that restarted. Pause/restart still requires fresh processes and offers.
+
+Only the OS credential service stores the private device key. TLS private keys
+remain in memory. The relay still sees opaque inner TLS; no signer key is sent to
+it. On Linux the pilot may use local Secret Service Unix IPC before confirmation;
+it does not open TCP/WSS to the relay before confirmation, nor start a listener.
+
+CI uses a private Secret Service bus/collection inside a network-isolated
+container, fresh Xvfb clipboards and a private WSS relay. Two successive process
+pairs reload the same initialized profiles; signed ACK/Idle/TTL tests and relay
+restart recovery pass. Tampering/context/format tests and explicit downgrade/
+failed-confirmation cases verify rejection before any transport connection.
+These tests do not touch the host keyring or stage service. Real Mac Keychain and
+cross-machine signed-offer pilot validation remain manual in addition to native
+identity-store CI on macOS/Windows.
+
 ## Optional reconnect within the same running session
 
 Add `--reconnect` to **both** relay pilot commands to recover from transport loss.
