@@ -309,6 +309,15 @@ This links persistent identity to the supervised pilot, with fresh TLS/session k
 and explicit device-fingerprint confirmations. Saved peer trust, production group
 enrollment and six-digit code pairing remain under development.
 
+## Explicit local peer approvals
+
+`peer trust` verifies a signed device offer, requires independent full-fingerprint
+approval, and saves a new owner-signed peer-key record under a local name.
+`peer show` authenticates that record after restart. No network, clipboard or
+relay credential is needed. Existing/corrupt names are never replaced.
+See [the local peer-trust guide](docs/PEER-TRUST.md) for commands and storage limits.
+This is offline local approval, not group enrollment or automatic pilot trust yet.
+
 ## Signed text event prototype
 
 ```sh

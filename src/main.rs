@@ -59,7 +59,7 @@ fn help() -> String {
         text.push_str("\n  doctor --session  Read macOS session state without clipboard access");
     }
     if cfg!(feature = "os-keyring") {
-        text.push_str("\n\nIdentity (system credential store):\n  identity init [--profile name]\n  identity show [--profile name]");
+        text.push_str("\n\nIdentity (system credential store):\n  identity init [--profile name]\n  identity show [--profile name]\n  peer --help    Explicit local peer trust/show commands");
     }
     text
 }
@@ -94,6 +94,8 @@ fn run(args: &[String]) -> Result<String, &'static str> {
         ["watch-probe", "--observe-clipboard", seconds] => watch_probe(seconds),
         #[cfg(feature = "clipboard")]
         ["doctor", "--clipboard"] => clipboard_doctor(),
+        #[cfg(feature = "os-keyring")]
+        ["peer", rest @ ..] => our_clipboard::peer_trust::run(&rest.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
         #[cfg(feature = "os-keyring")]
         ["identity", action @ ("init" | "show")] => {
             our_clipboard::identity::manage(action, "default").map_err(|error| error.message())

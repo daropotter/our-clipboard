@@ -25,7 +25,7 @@ fn validate_profile(profile: &str) -> Result<(), IdentityError> {
         Ok(())
     }
 }
-fn lock(root: &Path, profile: &str) -> Result<(File, PathBuf), IdentityError> {
+pub(super) fn lock(root: &Path, profile: &str) -> Result<(File, PathBuf), IdentityError> {
     validate_profile(profile)?;
     let directory = root.join(profile);
     let mut builder = fs::DirBuilder::new();
@@ -78,7 +78,7 @@ fn lock(root: &Path, profile: &str) -> Result<(File, PathBuf), IdentityError> {
     })?;
     Ok((file, directory.join("device.pub")))
 }
-fn read_pin(path: &Path) -> Result<Option<[u8; 32]>, IdentityError> {
+pub(super) fn read_pin(path: &Path) -> Result<Option<[u8; 32]>, IdentityError> {
     match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Ok(meta) if !meta.file_type().is_file() => return Err(IdentityError::Configuration),
@@ -199,6 +199,14 @@ pub fn open_existing(profile: &str) -> Result<DeviceIdentity, IdentityError> {
 #[cfg(feature = "os-keyring")]
 fn platform_identity(profile: &str, initialize: bool) -> Result<DeviceIdentity, IdentityError> {
     validate_profile(profile)?;
+    let root = configuration_root()?;
+    let entry = keyring::Entry::new(SERVICE, &format!("client-v1:{profile}"))
+        .map_err(|_| IdentityError::Unavailable)?;
+    load(&PlatformStore(entry), &root, profile, initialize)
+}
+
+#[cfg(feature = "os-keyring")]
+pub(super) fn configuration_root() -> Result<PathBuf, IdentityError> {
     let root = if let Some(directory) = std::env::var_os("OUR_CLIPBOARD_CONFIG_DIR") {
         PathBuf::from(directory)
     } else {
@@ -207,9 +215,7 @@ fn platform_identity(profile: &str, initialize: bool) -> Result<DeviceIdentity, 
             .config_dir()
             .to_path_buf()
     };
-    let entry = keyring::Entry::new(SERVICE, &format!("client-v1:{profile}"))
-        .map_err(|_| IdentityError::Unavailable)?;
-    load(&PlatformStore(entry), &root, profile, initialize)
+    Ok(root)
 }
 
 #[cfg(test)]

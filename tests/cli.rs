@@ -439,3 +439,19 @@ fn signed_pilot_never_creates_an_offer_or_falls_back_when_identity_store_is_miss
     #[cfg(not(feature = "os-keyring"))]
     assert!(diagnostic.contains("no ephemeral fallback"));
 }
+
+#[cfg(feature = "os-keyring")]
+#[test]
+fn peer_commands_require_explicit_context_before_opening_any_store() {
+    assert!(cli(&["peer", "--help"]).status.success());
+    for args in [
+        vec!["peer", "trust", "--name", "remote"],
+        vec!["peer", "show", "--name", "../remote"],
+        vec!["peer", "show", "--name", "x", "--offer", "ignored"],
+        vec!["peer", "show", "--name", "x", "--name", "y"],
+    ] {
+        let output = cli(&args);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+    }
+}
