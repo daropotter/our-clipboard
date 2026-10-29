@@ -34,6 +34,8 @@ For repeated supervised runs, [local launch settings](docs/PILOT-CONFIG.md) prov
 credential format and paths, without contacting a relay or accessing the clipboard.
 Launch files contain no credentials or saved clipboard consent and require an already
 approved signed peer. Fresh offer exchange is still required.
+`pilot pause --file FILE` requests Pause via the configured local marker;
+`pilot controls --file FILE` inspects Pause/Idle markers without contacting a pilot.
 Optional [structured relay pilot status](docs/PILOT-STATUS.md) exports content-free
 JSON Lines for monitoring via `--status-json` or a launch file’s `status_json` field.
 

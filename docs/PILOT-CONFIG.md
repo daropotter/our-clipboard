@@ -136,3 +136,47 @@ of a corrupted approval, and rejection of missing profile/lock metadata without
 repair or offer creation. Linux uses a disposable Secret Service; these checks
 must not be run against a personal credential store. They complement the isolated
 WSS/clipboard fixture and do not replace physical X11↔macOS validation.
+
+## Local Pause requests and marker inspection
+
+With `pause_file` configured before launch, request session-ending Pause using:
+
+```sh
+our-clipboard pilot pause --file /path/to/run/x11.json
+our-clipboard pilot controls --file /path/to/run/x11.json
+```
+
+`pause` creates an empty marker exclusively at the configured path, relative to
+that launch file's directory. Parent directories must already exist. New Unix
+markers have permissions no broader than 0600. An existing entry of any kind
+already requests Pause and is preserved without opening its contents, following
+its symlink, changing permissions, truncating or deleting it. New markers are
+synced (including their directory on Unix); a sync error leaves the marker in
+place and reports failure. The command does not create a missing configuration
+or invent a default `pause_file`.
+
+This only requests Pause: it is **not acknowledgement from a running process**.
+A pilot stops/discards pending text when its loop next observes the marker; a
+process blocked in startup, filesystem access or output may not observe it
+immediately. Verify process exit or its terminal `paused` record in the
+[structured status stream](PILOT-STATUS.md). This is separate from the command's
+success output. The command also prevents subsequent starts with that marker.
+It never resumes/restarts a session or removes a marker. To start again, explicitly
+remove the intended marker, choose fresh offer files and run a new pilot; the
+ordinary quiet period and clipboard consent still apply. It does not revive old
+buffered text. Idle remains a separate, non-terminal gate.
+
+`controls` reads marker metadata and reports `present`, `absent` or
+`not configured` separately for Pause and Idle. Metadata errors fail rather than
+claiming absence. This is a local snapshot, not a process query or a claim of
+READY, native screen-lock state, peer reachability or delivery. Both commands
+parse the launch file afresh, without platform/backend initialization, credentials,
+relay access or clipboard access; they work even without an initialized identity.
+The `status_json` setting affects a runtime pilot, not these commands' output.
+They reject `--replace-clipboard` and other extra options.
+
+Use the same trusted configuration and local filesystem as the running pilot.
+An active pilot uses its startup settings; editing the launch file before a
+control command can select a different marker. There is no process/session
+binding, remote control, new listener or protection against malicious same-account
+configuration/path changes. The command cannot override native/system Idle.
