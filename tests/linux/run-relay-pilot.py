@@ -483,6 +483,12 @@ with tempfile.TemporaryDirectory() as directory:
             print("Reconnect fault injection passed: " + reconnect_mode)
         print("Outbound WSS pilot passed: Idle startup/pause/resume/TTL, real HTTPS, pinned peer TLS, independent confirmations, startup isolation, bidirectional writes/ACKs and no client listen syscall.")
     except Exception:
+        if signed_offers:
+            try:
+                from credential_probe import snapshot
+                print("Private credential fixture metadata: " + json.dumps(snapshot(), sort_keys=True), file=sys.stderr)
+            except Exception:
+                print("Private credential fixture metadata: probe unavailable", file=sys.stderr)
         # Application statuses contain only public fingerprints and static operation names.
         for name in ("a.log", "b.log", "relay.log", "compositor.log"):
             if (root / name).exists():

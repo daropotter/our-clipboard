@@ -1,3 +1,4 @@
 FROM our-clipboard-relay-tests
-RUN apt-get update && apt-get install -y --no-install-recommends gnome-keyring dbus-x11 \
+RUN apt-get update && apt-get install -y --no-install-recommends gnome-keyring libglib2.0-bin dbus-x11 \
     && rm -rf /var/lib/apt/lists/*
+COPY tests/identity/credential_probe.py /credential_probe.py

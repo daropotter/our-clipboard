@@ -1,6 +1,7 @@
 FROM our-clipboard-kwin-tests
 USER root
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    openssl python3 strace gnome-keyring dbus-x11 xvfb xauth \
+    openssl python3 strace gnome-keyring libglib2.0-bin dbus-x11 xvfb xauth \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /tmp
+COPY tests/identity/credential_probe.py /credential_probe.py
