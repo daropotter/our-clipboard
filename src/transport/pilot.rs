@@ -2,6 +2,7 @@
 mod config;
 mod link;
 mod preflight;
+mod status;
 use super::outbound::{
     self, AccessToken, PublicOffer, RelayIdentity, Room, Side, SignedRelayOffer,
 };
@@ -14,6 +15,7 @@ use crate::{
     session::ClipboardSession,
 };
 use link::{AttemptError, Link, Reconnector};
+use status::{Event as StatusEvent, Reporter, State as StatusState};
 use std::{
     fs::{File, OpenOptions},
     io::{BufRead, BufReader},
@@ -39,6 +41,7 @@ const APPLY_RETRY_INTERVAL_MS: u64 = 250;
 const SEND_RETRY_INTERVAL_MS: u64 = 500;
 struct Options {
     stdio: bool,
+    status_json: bool,
     host: Option<String>,
     program: Option<String>,
     relay: Option<String>,
@@ -62,6 +65,7 @@ struct Options {
 fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
     let mut o = Options {
         stdio: false,
+        status_json: false,
         host: None,
         program: None,
         relay: None,
@@ -95,6 +99,10 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
         i += 1;
         if name == "--replace-clipboard" {
             consent = true;
+            continue;
+        }
+        if name == "--status-json" {
+            o.status_json = true;
             continue;
         }
         if name == "--reconnect" {
@@ -228,6 +236,11 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
             return Err("Own and peer public offer paths must differ.");
         }
     } else {
+        if o.status_json {
+            return Err(
+                "--status-json requires relay mode; SSH/stdio stdout is reserved for protocol frames.",
+            );
+        }
         if o.room.is_some()
             || o.side.is_some()
             || o.offer.is_some()
@@ -378,6 +391,7 @@ fn session(
     guard: Option<outbound::RelayLifetime>,
     reconnect: Option<Arc<Reconnector>>,
     enrollment: Option<(SigningPeer, PublicPeer)>,
+    status: &mut Reporter,
 ) -> Result<()> {
     let role = if o.relay.is_some() {
         if o.side == Some(Side::A) { "a" } else { "b" }
@@ -423,10 +437,12 @@ fn session(
     eprintln!(
         "[{role}] Authenticated pilot connected. Waiting through the new-session quiet period; startup contents are ignored."
     );
+    status.state(StatusState::Synchronizing)?;
     while wire::now()? < end {
         let now = wire::now()?;
         if idle_requested(o.pause_file.as_deref())? {
             protocol.close();
+            status.state(StatusState::Paused)?;
             eprintln!(
                 "[{role}] PAUSED: session ended and pending text discarded; restart with fresh offers."
             );
@@ -443,6 +459,7 @@ fn session(
                 return Err(error);
             }
             link = None;
+            status.state(StatusState::Disconnected)?;
             if reconnect.is_none() {
                 eprintln!("[{role}] Pilot peer disconnected; session ended, no replay on restart.");
                 return Ok(());
@@ -464,6 +481,7 @@ fn session(
             if let Some(receiver) = &attempt {
                 match receiver.try_recv() {
                     Ok(Ok(next)) => {
+                        status.state(StatusState::Synchronizing)?;
                         link = Some(next);
                         attempt = None;
                         pending_probe = None;
@@ -545,6 +563,13 @@ fn session(
                 );
             }
         }
+        // Publish control changes before processing any resulting clipboard application.
+        status.state(StatusState::session(
+            link.is_some(),
+            calibrated && sent_ready && peer_ready,
+            idle,
+            clipboard.is_some(),
+        ))?;
         // Reader/writer queues each hold one bounded frame; backpressure never blocks the event loop.
         for _ in 0..MAX_FRAMES_PER_TICK {
             let Some(current) = &link else {
@@ -602,15 +627,19 @@ fn session(
                                         protocol.receipt_bytes(&event, d)?,
                                     )?;
                                     if matches!(d, DeliveryDecision::Applied { .. }) {
+                                        status.event(StatusEvent::LocalApplied)?;
                                         eprintln!("[{role}] Applied peer event.");
                                     }
                                 }
                                 None => eprintln!(
                                     "[{role}] Peer write failed; latest event retained for bounded retry."
                                 ),
-                                Some(DeliveryDecision::BufferedIdle { .. }) => eprintln!(
-                                    "[{role}] Peer event buffered while Idle; no application receipt sent."
-                                ),
+                                Some(DeliveryDecision::BufferedIdle { .. }) => {
+                                    status.event(StatusEvent::PeerBufferedIdle)?;
+                                    eprintln!(
+                                        "[{role}] Peer event buffered while Idle; no application receipt sent."
+                                    );
+                                }
                                 Some(_) => eprintln!(
                                     "[{role}] Peer event skipped by age/order/session checks."
                                 ),
@@ -622,6 +651,7 @@ fn session(
                             && protocol.observe_receipt(&bytes, &mut out.tracker).is_ok()
                             && out.tracker.progress().complete()
                         {
+                            status.event(StatusEvent::PeerApplicationConfirmed)?;
                             eprintln!("[{role}] Peer confirmed application.");
                             outgoing = None;
                         }
@@ -665,6 +695,12 @@ fn session(
                 "[{role}] READY: copy new text now. Pilot changes the peer clipboard; contents are never logged."
             );
         }
+        status.state(StatusState::session(
+            link.is_some(),
+            transport_ready,
+            idle,
+            clipboard.is_some(),
+        ))?;
         if !idle && let Some(session) = &mut clipboard {
             // Poll native local changes before retrying remote state, preserving local-copy order.
             if let Some(text) = session
@@ -674,6 +710,7 @@ fn session(
                     Error::Worker
                 })?
             {
+                status.event(StatusEvent::LocalCopySelected)?;
                 eprintln!("[{role}] New local copy selected.");
                 let event = protocol.sign(&text)?;
                 protocol.record_local(&event).inspect_err(|_e| {
@@ -709,6 +746,9 @@ fn session(
                         Kind::Applied,
                         protocol.receipt_bytes(&event, decision)?,
                     )?;
+                    if matches!(decision, DeliveryDecision::Applied { .. }) {
+                        status.event(StatusEvent::LocalApplied)?;
+                    }
                     eprintln!("[{role}] Applied pending peer event.");
                 }
                 if !transport_ready && let Some(estimate) = &estimate {
@@ -737,6 +777,7 @@ fn session(
             now.saturating_sub(out.event.context().created_boot_ms) >= u64::from(o.ttl)
         }) {
             outgoing = None;
+            status.event(StatusEvent::LocalEventExpired)?;
             eprintln!("[{role}] Latest local event expired without a confirmed peer application.");
         }
         if transport_ready
@@ -862,7 +903,7 @@ fn named_peer(
         Err("Named peers require the os-keyring feature; no automatic enrollment fallback.")
     }
 }
-fn relay_pilot(o: &Options) -> std::result::Result<(), &'static str> {
+fn relay_pilot(o: &Options, status: &mut Reporter) -> std::result::Result<(), &'static str> {
     let token = AccessToken::from_env().map_err(|e| e.message())?;
     let outer =
         outbound::relay_roots(o.relay_ca.as_deref().map(Path::new)).map_err(|e| e.message())?;
@@ -885,6 +926,9 @@ fn relay_pilot(o: &Options) -> std::result::Result<(), &'static str> {
         )
         .map_err(|_| "Could not sign public transport offer.")?;
         save_offer_bytes(Path::new(o.offer.as_ref().unwrap()), own.to_wire())?;
+        status
+            .state(StatusState::WaitingForPeerOffer)
+            .map_err(|_| "Pilot status output failed.")?;
         eprintln!(
             "Own PUBLIC signed offer saved. Device fingerprint: {}",
             own.device_id().fingerprint()
@@ -933,6 +977,9 @@ fn relay_pilot(o: &Options) -> std::result::Result<(), &'static str> {
         (peer.into_transport_offer(), Some((signing, expected)))
     } else {
         save_offer(Path::new(o.offer.as_ref().unwrap()), &offer)?;
+        status
+            .state(StatusState::WaitingForPeerOffer)
+            .map_err(|_| "Pilot status output failed.")?;
         eprintln!(
             "Own PUBLIC offer saved. Fingerprint: {}",
             offer.fingerprint()
@@ -951,6 +998,9 @@ fn relay_pilot(o: &Options) -> std::result::Result<(), &'static str> {
         )?;
         (peer, None)
     };
+    status
+        .state(StatusState::Connecting)
+        .map_err(|_| "Pilot status output failed.")?;
     let config = Arc::new(Reconnector {
         identity,
         peer,
@@ -970,6 +1020,7 @@ fn relay_pilot(o: &Options) -> std::result::Result<(), &'static str> {
         Some(guard),
         o.reconnect.then_some(config),
         enrollment,
+        status,
     )
     .map_err(relay_session_error)
 }
@@ -1009,7 +1060,7 @@ fn platform_options(o: &Options) -> std::result::Result<(), &'static str> {
 }
 pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
     if matches!(args,[arg] if arg=="--help"||arg=="-h") {
-        return Ok("Usage: our-clipboard pilot --config FILE --replace-clipboard\n       our-clipboard pilot config-check --file FILE\n       our-clipboard pilot preflight --file FILE\nOr: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nOptional --identity-profile PROFILE uses an explicitly initialized system-store identity to sign fresh offers; BOTH sides must use signed mode and confirm device fingerprints. Optional --peer-name NAME selects an existing local peer approval and verifies the signed offer without a prompt; requires --identity-profile. Missing/corrupt/changed trust stops, never enrolls or replaces. Optional --reconnect retries transport loss within the same live authenticated session, without renewing TTL. Relay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. Optional --macos-session-idle observes the macOS caller/console state (experimental registry schema; unknown/stale means Idle). Optional --logind-idle observes the Linux/X11 logind session (unknown/stale means Idle). Optional --idle-file FILE pauses while the marker exists; metadata errors stop the pilot. This injects Idle state, not automatic screen-lock detection. Optional --pause-file FILE ends the session and discards pending text when present; resuming requires fresh pilots/offers. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
+        return Ok("Usage: our-clipboard pilot --config FILE --replace-clipboard\n       our-clipboard pilot config-check --file FILE\n       our-clipboard pilot preflight --file FILE\nOr: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nOptional --status-json emits versioned content-free JSON Lines on stdout in relay mode; human diagnostics remain on stderr. See docs/PILOT-STATUS.md. Optional --identity-profile PROFILE uses an explicitly initialized system-store identity to sign fresh offers; BOTH sides must use signed mode and confirm device fingerprints. Optional --peer-name NAME selects an existing local peer approval and verifies the signed offer without a prompt; requires --identity-profile. Missing/corrupt/changed trust stops, never enrolls or replaces. Optional --reconnect retries transport loss within the same live authenticated session, without renewing TTL. Relay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. Optional --macos-session-idle observes the macOS caller/console state (experimental registry schema; unknown/stale means Idle). Optional --logind-idle observes the Linux/X11 logind session (unknown/stale means Idle). Optional --idle-file FILE pauses while the marker exists; metadata errors stop the pilot. This injects Idle state, not automatic screen-lock detection. Optional --pause-file FILE ends the session and discards pending text when present; resuming requires fresh pilots/offers. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
     }
     if let Some(result) = preflight::command(args) {
         return result;
@@ -1023,6 +1074,13 @@ pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
     if idle_requested(o.pause_file.as_deref())
         .map_err(|_| "Pause marker unavailable; pilot not started.")?
     {
+        if o.status_json {
+            let mut status = Reporter::new(Some(protocol_stdout()?));
+            status
+                .state(StatusState::Paused)
+                .map_err(|_| "Pilot status output failed.")?;
+            return Ok(String::new());
+        }
         return Ok(
             "PAUSED: pilot not started; remove the marker before creating a fresh session.".into(),
         );
@@ -1041,18 +1099,26 @@ pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
     }
     let output = protocol_stdout()?;
     if o.relay.is_some() {
-        drop(output);
-        relay_pilot(&o)?;
+        let mut status = Reporter::new(if o.status_json { Some(output) } else { None });
+        status
+            .state(StatusState::Starting)
+            .map_err(|_| "Pilot status output failed.")?;
+        let result = relay_pilot(&o, &mut status);
+        status
+            .finish(result.is_ok())
+            .map_err(|_| "Pilot status output failed.")?;
+        result?;
         return Ok(String::new());
     }
+    let mut status = Reporter::new(None);
     let result = if o.stdio {
-        session(std::io::stdin(), output, &o, None, None, None)
+        session(std::io::stdin(), output, &o, None, None, None, &mut status)
     } else {
         drop(output);
         let mut child = ChildGuard(ssh(&o)?);
         let input = child.0.stdout.take().ok_or("SSH output unavailable.")?;
         let output = child.0.stdin.take().ok_or("SSH input unavailable.")?;
-        session(input, output, &o, None, None, None)
+        session(input, output, &o, None, None, None, &mut status)
     };
     result.map_err(|_|"Pilot stopped: transport, clock or clipboard operation failed; content and keys are omitted.")?;
     Ok(String::new())
@@ -1134,6 +1200,11 @@ mod relay_tests {
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
         assert!(options(&base).is_ok());
+        let mut structured = base.clone();
+        structured.push("--status-json".into());
+        assert!(options(&structured).is_ok_and(|o| o.status_json));
+        structured.push("--status-json".into());
+        assert!(options(&structured).is_err());
         let mut signed = base.clone();
         signed.extend(["--identity-profile".into(), "workstation".into()]);
         assert!(
@@ -1159,6 +1230,9 @@ mod relay_tests {
         .map(str::to_string)
         .to_vec();
         assert!(options(&ssh_named).is_ok());
+        let mut structured_ssh = ssh_named.clone();
+        structured_ssh.push("--status-json".into());
+        assert!(options(&structured_ssh).is_err());
         ssh_named.extend(["--peer-name".into(), "remote".into()]);
         assert!(options(&ssh_named).is_err());
         let ssh_signed = [

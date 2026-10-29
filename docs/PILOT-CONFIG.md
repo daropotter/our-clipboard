@@ -65,6 +65,7 @@ separately; configuration files cannot select them.
 
 Optional fields are `seconds` (default 300), `ttl_ms` (default 30000), `relay_ca`,
 `idle_file`, `pause_file`, `reconnect`, `logind_idle` and `macos_session_idle`.
+Optional `status_json` enables [structured runtime status](PILOT-STATUS.md).
 Optional booleans default to false. Numeric bounds and duration-versus-quiet-period
 checks are shared with the existing CLI. Native observation flags retain their
 existing OS/schema/physical-validation restrictions; a static check does not test
