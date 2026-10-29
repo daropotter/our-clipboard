@@ -35,19 +35,36 @@ mod fixture {
     #[zbus::interface(name = "org.freedesktop.login1.Session")]
     impl Session {
         #[zbus(property)]
-        fn user(&self) -> (u32, OwnedObjectPath) {
-            (
-                rustix::process::geteuid().as_raw(),
+        fn user(&self) -> fdo::Result<(u32, OwnedObjectPath)> {
+            let state = self.0.read();
+            if state == "missing-user" {
+                return Err(fdo::Error::Failed("Test user unavailable".into()));
+            }
+            let uid = rustix::process::geteuid().as_raw();
+            Ok((
+                if state == "foreign-user" {
+                    uid.wrapping_add(1)
+                } else {
+                    uid
+                },
                 "/org/freedesktop/login1/user/test".try_into().unwrap(),
-            )
+            ))
         }
         #[zbus(property, name = "Type")]
         fn kind(&self) -> &str {
-            "x11"
+            if self.0.read() == "wayland" {
+                "wayland"
+            } else {
+                "x11"
+            }
         }
         #[zbus(property)]
         fn class(&self) -> &str {
-            "user"
+            if self.0.read() == "greeter" {
+                "greeter"
+            } else {
+                "user"
+            }
         }
         #[zbus(property)]
         fn active(&self) -> bool {
@@ -55,7 +72,7 @@ mod fixture {
         }
         #[zbus(property)]
         fn remote(&self) -> bool {
-            false
+            self.0.read() == "remote"
         }
         #[zbus(property)]
         fn locked_hint(&self) -> fdo::Result<bool> {

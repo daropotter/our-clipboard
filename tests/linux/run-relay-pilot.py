@@ -221,7 +221,9 @@ with tempfile.TemporaryDirectory() as directory:
             # binding as the pilot, without relay credentials or clipboard writes.
             for state, expected in [("active", "Active"), ("locked", "Idle"),
                                     ("inactive", "Idle"), ("sleep", "Idle"),
-                                    ("unknown", "Unknown")]:
+                                    ("unknown", "Unknown"), ("foreign-user", "Unknown"),
+                                    ("missing-user", "Unknown"), ("remote", "Idle"),
+                                    ("wayland", "Idle"), ("greeter", "Idle")]:
                 system_state("a", state)
                 probe_env = dict(system_env["a"], DISPLAY=":91", XDG_SESSION_TYPE="x11")
                 probe_env.pop("WAYLAND_DISPLAY", None)
@@ -231,16 +233,35 @@ with tempfile.TemporaryDirectory() as directory:
                      binary, "doctor", "--session"],
                     env=probe_env, capture_output=True, timeout=5)
                 if expected == "Unknown":
-                    assert probe.returncode == 2 and not probe.stdout
-                    assert b"Unknown" in probe.stderr
+                    assert probe.returncode == 2 and not probe.stdout, f"Session diagnostic accepted {state}"
+                    assert b"Unknown" in probe.stderr, f"Missing Unknown diagnostic for {state}"
                 else:
-                    assert probe.returncode == 0 and not probe.stderr
+                    assert probe.returncode == 0 and not probe.stderr, f"Session diagnostic failed for {state}"
                     assert probe.stdout.decode().strip() == (
-                        f"Linux/X11 session state: {expected}. No clipboard data accessed.")
+                        f"Linux/X11 session state: {expected}. No clipboard data accessed."), f"Wrong session state for {state}"
                 trace = (root / "session.trace").read_text()
                 assert "listen(" not in trace, "Session diagnostic tried to listen"
                 assert "AF_INET" not in trace, "Session diagnostic tried Internet transport"
                 assert inspect(":91", "inspect-request"), "Session diagnostic changed clipboard"
+            # Reachable X11 and an otherwise Active login1 session must not
+            # override either native Wayland environment selection signal.
+            system_state("a", "active")
+            for selection in ({"XDG_SESSION_TYPE": "wayland"},
+                              {"XDG_SESSION_TYPE": "x11", "WAYLAND_DISPLAY": "wayland-private"}):
+                probe_env = dict(system_env["a"], DISPLAY=":91")
+                probe_env.pop("WAYLAND_DISPLAY", None)
+                probe_env.pop("OUR_CLIPBOARD_RELAY_TOKEN", None)
+                probe_env.update(selection)
+                probe = subprocess.run(
+                    ["strace", "-f", "-e", "trace=network", "-o", str(root / "session.trace"),
+                     binary, "doctor", "--session"],
+                    env=probe_env, capture_output=True, timeout=5)
+                assert probe.returncode == 2 and not probe.stdout
+                assert b"Unknown" in probe.stderr and b"Wayland" in probe.stderr
+                trace = (root / "session.trace").read_text()
+                assert "connect(" not in trace and "listen(" not in trace, "Wayland diagnostic accessed a service"
+                assert inspect(":91", "inspect-request"), "Rejected diagnostic changed clipboard"
+            print("Session diagnostic passed: caller binding, incomplete metadata, unsupported sessions and no Wayland fallback")
             system_state("a", "locked")
         room = secrets.token_hex(32)  # Public routing ID, not a credential.
         def pause_client(side):
