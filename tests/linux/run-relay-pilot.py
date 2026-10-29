@@ -217,6 +217,31 @@ with tempfile.TemporaryDirectory() as directory:
                 system_state(side, "locked" if side == "a" else "active")
                 (root / f"{side}.pid").write_text(str(display_workers[":91" if side == "a" else ":92"].pid))
                 start_system(side)
+            # Exercise the public diagnostic against the same private login1/X11
+            # binding as the pilot, without relay credentials or clipboard writes.
+            for state, expected in [("active", "Active"), ("locked", "Idle"),
+                                    ("inactive", "Idle"), ("sleep", "Idle"),
+                                    ("unknown", "Unknown")]:
+                system_state("a", state)
+                probe_env = dict(system_env["a"], DISPLAY=":91", XDG_SESSION_TYPE="x11")
+                probe_env.pop("WAYLAND_DISPLAY", None)
+                probe_env.pop("OUR_CLIPBOARD_RELAY_TOKEN", None)
+                probe = subprocess.run(
+                    ["strace", "-f", "-e", "trace=network", "-o", str(root / "session.trace"),
+                     binary, "doctor", "--session"],
+                    env=probe_env, capture_output=True, timeout=5)
+                if expected == "Unknown":
+                    assert probe.returncode == 2 and not probe.stdout
+                    assert b"Unknown" in probe.stderr
+                else:
+                    assert probe.returncode == 0 and not probe.stderr
+                    assert probe.stdout.decode().strip() == (
+                        f"Linux/X11 session state: {expected}. No clipboard data accessed.")
+                trace = (root / "session.trace").read_text()
+                assert "listen(" not in trace, "Session diagnostic tried to listen"
+                assert "AF_INET" not in trace, "Session diagnostic tried Internet transport"
+                assert inspect(":91", "inspect-request"), "Session diagnostic changed clipboard"
+            system_state("a", "locked")
         room = secrets.token_hex(32)  # Public routing ID, not a credential.
         def pause_client(side):
             # Control commands need only syntactically valid local settings, not

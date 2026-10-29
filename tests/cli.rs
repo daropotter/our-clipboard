@@ -812,3 +812,30 @@ fn experimental_wayland_is_explicit_native_only_and_rejects_logind() {
     }
     assert!(!own.exists() && !peer.exists());
 }
+
+#[cfg(all(feature = "clipboard", target_os = "linux"))]
+#[test]
+fn linux_session_diagnostic_fails_closed_without_a_private_bus() {
+    let dir = tempfile::tempdir().unwrap();
+    for wayland in [false, true] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
+            .args(["doctor", "--session"])
+            .env(
+                "DBUS_SYSTEM_BUS_ADDRESS",
+                format!("unix:path={}/missing-bus", dir.path().display()),
+            )
+            .env_remove("WAYLAND_DISPLAY")
+            .env("XDG_SESSION_TYPE", if wayland { "wayland" } else { "x11" })
+            .env_remove("DISPLAY")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(error.contains("Unknown"));
+        assert!(!error.contains(dir.path().to_str().unwrap()));
+        if wayland {
+            assert!(error.contains("Wayland"));
+        }
+    }
+}

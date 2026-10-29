@@ -212,6 +212,19 @@ impl Drop for Monitor {
         self.stop.store(true, Ordering::Relaxed);
     }
 }
+/// Observe the same confirmed cache as the pilot without reading clipboard data.
+pub(crate) fn probe() -> State {
+    let monitor = Monitor::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        let state = monitor.state();
+        if state != State::Unknown || std::time::Instant::now() >= deadline {
+            return state;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

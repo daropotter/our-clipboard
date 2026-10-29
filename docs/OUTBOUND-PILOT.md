@@ -319,6 +319,16 @@ opt-in and unsupported on macOS/Windows; there is no silent fallback there.
 No listener, root access, lock command, inhibitor or change to the desktop is
 installed. Without the flag, the existing supervised behavior stays unchanged.
 
+Before pairing, run `our-clipboard doctor --session` locally to inspect the same
+Linux/X11 monitor without relay credentials or clipboard data access. It prints
+only Active/Idle, or exits with status 2 and Unknown. Active requires the same
+fresh-observation confirmation as the pilot. The diagnostic waits up to one
+second for a usable cached observation, then fails closed; this is a scheduling
+budget, not a real-time OS deadline. It may open a local X11 connection solely
+for the caller/display binding described below. Wayland sessions are rejected;
+there is no fallback to XWayland. This is a point-in-time observation, not a
+running-pilot acknowledgement, readiness check or physical lock certification.
+
 A worker first resolves `GetSessionByPID` with the actual pilot PID. Some desktop
 terminals run under the user manager and have no direct logind session. In that
 case the worker opens the selected local X11 connection, obtains its server PID
