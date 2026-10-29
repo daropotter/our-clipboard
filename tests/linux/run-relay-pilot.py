@@ -30,12 +30,16 @@ relay_port = 8443 if external else 443
 children = []
 handles = []
 
-def spawn(args, *, env=None, log=None, stdin=None):
+def spawn(args, *, env=None, log=None, stdin=None, json_log=None):
     out = subprocess.DEVNULL
     if log:
         out = open(log, "wb")
         handles.append(out)
-    child = subprocess.Popen(args, env=env, stdin=stdin, stdout=subprocess.DEVNULL, stderr=out)
+    structured = subprocess.DEVNULL
+    if json_log:
+        structured = open(json_log, "wb")
+        handles.append(structured)
+    child = subprocess.Popen(args, env=env, stdin=stdin, stdout=structured, stderr=out)
     children.append(child)
     return child
 
@@ -180,7 +184,7 @@ with tempfile.TemporaryDirectory() as directory:
         (root / "a.idle").touch()  # Start without initializing a native observer.
         for side, display, peer in (("a", ":91", "b"), ("b", ":92", "a")):
             args = ["strace", "-f", "-qq", "-e", "trace=listen", "-o", str(root / f"{side}.trace"),
-                    binary, "pilot", "--replace-clipboard", "--relay", f"wss://localhost:{relay_port}/our-clipboard/v1",
+                    binary, "pilot", "--replace-clipboard", "--status-json", "--relay", f"wss://localhost:{relay_port}/our-clipboard/v1",
                     "--relay-ca", str(cert), "--room", room, "--side", side,
                     "--offer", str(root / f"{side}.offer"), "--peer-offer", str(root / f"{peer}-for-{side}.offer"),
                     "--seconds", "90" if reconnect_mode == "stale" else "30" if reconnect_mode else "14", "--ttl-ms", "30000" if reconnect_mode == "stale" else "3000" if reconnect_mode else "1000", "--idle-file", str(root / f"{side}.idle"), "--pause-file", str(root / f"{side}.pause"), "--max-drift-ppm", "1000",
@@ -200,7 +204,7 @@ with tempfile.TemporaryDirectory() as directory:
                     "offer": f"{side}.offer", "peer_offer": f"{peer}-for-{side}.offer", "relay_ca": "relay.pem",
                     "idle_file": f"{side}.idle", "pause_file": f"{side}.pause", "seconds": 30,
                     "ttl_ms": 3000, "max_drift_ppm": 1000, "clock_granularity_ms": 1,
-                    "reconnect": bool(reconnect_mode),
+                    "reconnect": bool(reconnect_mode), "status_json": True,
                 }
                 launch = root / f"{side}.json"
                 launch.write_text(json.dumps(settings))
@@ -213,7 +217,8 @@ with tempfile.TemporaryDirectory() as directory:
                 # The fixture cwd is /tmp, not the configuration's temporary directory.
                 args = args[:args.index("pilot") + 1] + ["--config", str(launch), "--replace-clipboard"]
             clients[side] = spawn(args, env=dict(system_env.get(side, env), DISPLAY=display),
-                                  stdin=subprocess.PIPE, log=root / f"{side}.log")
+                                  stdin=subprocess.PIPE, log=root / f"{side}.log",
+                                  json_log=root / f"{side}.jsonl")
         wait_for(lambda: offer_ready(root / "a.offer") and offer_ready(root / "b.offer"))
         for side, peer in (("a", "b"), ("b", "a")):
             data = (root / f"{peer}.offer").read_bytes()
@@ -353,6 +358,30 @@ with tempfile.TemporaryDirectory() as directory:
             from peer_pin_scenario import reject_changed_or_unusable_trust
             reject_changed_or_unusable_trust(root, binary, env, room, bad_args,
                                             spawn, status, wait_for, offer_ready)
+        # Completed subprocess streams must contain JSON only, with fixed content-free fields.
+        for side in clients:
+            records = [json.loads(line) for line in (root / f"{side}.jsonl").read_text().splitlines()]
+            assert records and records[0] == {"version": 1, "state": "starting"}, "Missing structured start"
+            for record in records:
+                assert record["version"] == 1 and set(record) in ({"version", "state"}, {"version", "event"}), "Unexpected status fields"
+                if "state" in record:
+                    assert record["state"] in {"starting", "waiting_for_peer_offer", "connecting", "synchronizing", "disconnected", "idle", "ready", "paused", "ended", "failed"}, "Unexpected state"
+                else:
+                    assert record["event"] in {"local_copy_selected", "local_applied", "peer_buffered_idle", "peer_application_confirmed", "local_event_expired"}, "Unexpected event"
+            states = [r["state"] for r in records if "state" in r]
+            assert "ready" in states, "No structured readiness"
+            if side == "a":
+                assert states.index("idle") < states.index("ready"), "Idle startup claimed readiness"
+            expected_end = "failed" if expected_exit else "paused" if "PAUSED:" in status(root / f"{side}.log") else "ended"
+            assert states[-1] == expected_end, "Incorrect terminal status"
+            confirmed = sum(r.get("event") == "peer_application_confirmed" for r in records)
+            assert confirmed == status(root / f"{side}.log").count("Peer confirmed application."), "Structured ACK differs from verified receipt"
+            if reconnect_mode:
+                assert "disconnected" in states, "No structured outage state"
+                if not expected_exit:
+                    disconnected = states.index("disconnected")
+                    assert "synchronizing" in states[disconnected + 1:] and "ready" in states[disconnected + 1:], "Reconnect skipped readiness checks"
+        print("Structured status passed: JSON-only output, readiness/Idle/reconnect/terminal states and verified application receipts")
         logs = status(root / "a.log") + status(root / "b.log")
         assert logs.count("Applied peer event.") == expected_apps, "Unexpected repeated application/echo"
         assert logs.count("Applied pending peer event.") == expected_pending, "Buffered value was not applied exactly once"

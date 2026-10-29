@@ -569,3 +569,56 @@ fn launch_check_is_read_only_and_runtime_consent_cannot_come_from_json() {
     }
     assert!(!config_dir.path().join("unused-identities").exists());
 }
+
+#[test]
+#[cfg(all(feature = "clipboard", unix))]
+fn relay_structured_status_is_content_free_on_pause_and_setup_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let pause = root.path().join("pause");
+    let own = root.path().join("own.offer");
+    let peer = root.path().join("peer.offer");
+    let base = [
+        "pilot",
+        "--replace-clipboard",
+        "--status-json",
+        "--relay",
+        "wss://relay.invalid/our-clipboard/v1",
+        "--room",
+        &"1".repeat(64),
+        "--side",
+        "a",
+        "--offer",
+        own.to_str().unwrap(),
+        "--peer-offer",
+        peer.to_str().unwrap(),
+        "--pause-file",
+        pause.to_str().unwrap(),
+        "--max-drift-ppm",
+        "1000",
+        "--clock-granularity-ms",
+        "1",
+    ];
+    std::fs::write(&pause, []).unwrap();
+    let call = || {
+        Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
+            .args(base)
+            .env_remove("OUR_CLIPBOARD_RELAY_TOKEN")
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("XDG_SESSION_TYPE")
+            .output()
+            .unwrap()
+    };
+    let paused = call();
+    assert!(paused.status.success());
+    assert_eq!(paused.stdout, b"{\"version\":1,\"state\":\"paused\"}\n");
+    assert!(paused.stderr.is_empty());
+    std::fs::remove_file(&pause).unwrap();
+    let failed = call();
+    assert_eq!(failed.status.code(), Some(2));
+    assert_eq!(
+        failed.stdout,
+        b"{\"version\":1,\"state\":\"starting\"}\n{\"version\":1,\"state\":\"failed\"}\n"
+    );
+    assert!(!own.exists() && !peer.exists());
+}
