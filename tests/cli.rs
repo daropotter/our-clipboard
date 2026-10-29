@@ -484,6 +484,7 @@ fn launch_check_is_read_only_and_runtime_consent_cannot_come_from_json() {
             .env_remove("DISPLAY")
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("WAYLAND_SOCKET")
+            .env_remove("XDG_SESSION_TYPE")
             .env(
                 "DBUS_SESSION_BUS_ADDRESS",
                 "unix:path=/nonexistent-our-clipboard-bus",

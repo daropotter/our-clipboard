@@ -20,6 +20,9 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+      - name: Preflight fixture ignores the parent Wayland session
+        if: runner.os == 'Linux'
+        run: XDG_SESSION_TYPE=wayland cargo test --locked --test cli -- --exact launch_check_is_read_only_and_runtime_consent_cannot_come_from_json
       - run: cargo clippy --locked --no-default-features --all-targets -- -D warnings
       - run: cargo test --locked --no-default-features
       - run: cargo run --locked --no-default-features -- transport-probe
@@ -168,6 +171,18 @@ jobs:
       - run: docker build -t our-clipboard-tests -f tests/linux/Dockerfile .
       - run: docker build -t our-clipboard-relay-tests -f tests/linux/Dockerfile.relay .
       - run: docker build -t our-clipboard-signed-relay-tests -f tests/identity/Dockerfile.relay .
+      - run: cargo test --locked --test identity_store --no-run
+      - name: Native preflight fixture ignores the parent Wayland session
+        shell: bash
+        run: |
+          binary=$(find target/debug/deps -maxdepth 1 -type f -executable -name 'identity_store-*' -print -quit)
+          test -n "$binary"
+          docker run --rm --network none -e XDG_SESSION_TYPE=wayland \
+            -e OUR_CLIPBOARD_TEST_CLI=/pilot \
+            -v "$PWD/target/debug/our-clipboard:/pilot:ro" \
+            -v "$PWD/target/debug/deps:/tests:ro" \
+            -v "$PWD/tests/identity/run.sh:/run-tests.sh:ro" \
+            our-clipboard-signed-relay-tests bash /run-tests.sh "/tests/$(basename "$binary")"
       - name: System-store identity, signed offers, fresh processes and reconnect
         run: |
           docker run --rm --network none \
