@@ -223,6 +223,8 @@ fn preflight(executable: &std::ffi::OsStr, config: &std::path::Path) -> std::pro
         .env("OUR_CLIPBOARD_RELAY_TOKEN", "a".repeat(64))
         .env_remove("DISPLAY")
         .env_remove("WAYLAND_DISPLAY")
+        .env_remove("WAYLAND_SOCKET")
+        .env_remove("XDG_SESSION_TYPE")
         .output()
         .unwrap()
 }
