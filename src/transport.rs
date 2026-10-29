@@ -490,3 +490,23 @@ pub fn macos_session_probe() -> std::result::Result<String, &'static str> {
         )),
     }
 }
+
+/// Read Linux/X11 login1 metadata using the pilot's fail-closed monitor.
+#[cfg(all(feature = "clipboard", target_os = "linux"))]
+pub fn logind_session_probe() -> std::result::Result<String, &'static str> {
+    if std::env::var_os("WAYLAND_DISPLAY").is_some_and(|s| !s.is_empty())
+        || std::env::var("XDG_SESSION_TYPE").is_ok_and(|s| s == "wayland")
+    {
+        return Err(
+            "Linux/X11 session state is Unknown; Wayland session observation is unsupported.",
+        );
+    }
+    match crate::logind::probe() {
+        crate::logind::State::Unknown => {
+            Err("Linux/X11 session state is Unknown; clipboard access would remain Idle.")
+        }
+        state => Ok(format!(
+            "Linux/X11 session state: {state:?}. No clipboard data accessed."
+        )),
+    }
+}

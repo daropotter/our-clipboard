@@ -55,8 +55,11 @@ Clipboard integration is disabled. Synchronization is not implemented yet.";
 
 fn help() -> String {
     let mut text = HELP.to_owned();
-    if cfg!(all(feature = "clipboard", target_os = "macos")) {
-        text.push_str("\n  doctor --session  Read macOS session state without clipboard access");
+    if cfg!(all(
+        feature = "clipboard",
+        any(target_os = "macos", target_os = "linux")
+    )) {
+        text.push_str("\n  doctor --session  Read local session state without clipboard access");
     }
     if cfg!(feature = "clipboard") {
         text.push_str("\n  pilot --config FILE --replace-clipboard  Run trusted launch settings\n  pilot config-check --file FILE           Validate settings without starting a pilot\n  pilot preflight --file FILE              Check local credentials/trust without transport or clipboard");
@@ -109,6 +112,8 @@ fn run(args: &[String]) -> Result<String, &'static str> {
         }
         #[cfg(all(feature = "clipboard", target_os = "macos"))]
         ["doctor", "--session"] => our_clipboard::transport::macos_session_probe(),
+        #[cfg(all(feature = "clipboard", target_os = "linux"))]
+        ["doctor", "--session"] => our_clipboard::transport::logind_session_probe(),
         ["state-probe"] => {
             our_clipboard::freshness::durable_probe().map_err(|error| error.message())
         }
