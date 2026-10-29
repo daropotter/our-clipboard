@@ -1,7 +1,7 @@
 """Fault injection for the private WSS/native fixture; never targets external services."""
 import time
 
-def run(root, clients, *, mode, stop_relay, restart_relay, seed, inspect, status, wait_for):
+def run(root, clients, *, mode, stop_relay, restart_relay, seed, inspect, status, wait_for, pause):
     def count(side, label):
         return status(root / f"{side}.log").count(label)
     def disconnected(number):
@@ -47,7 +47,7 @@ def run(root, clients, *, mode, stop_relay, restart_relay, seed, inspect, status
         wait_for(lambda: count("a", "Peer confirmed application.") == 2)
         assert all(count(s, "Authenticated pilot connected.") == 1 for s in clients)
         for side, process in clients.items():
-            (root / f"{side}.pause").touch()
+            pause(side)
             assert process.wait(timeout=2) == 0
         return 3, 0, 0
     # Local copies selected while offline keep their original creation time/TTL.
@@ -79,14 +79,14 @@ def run(root, clients, *, mode, stop_relay, restart_relay, seed, inspect, status
     # Pause must remain responsive while reconnect attempts are outstanding.
     stop_relay()
     disconnected(3)
-    (root / "b.pause").touch()
+    pause("b")
     assert clients["b"].wait(timeout=2) == 0, "Offline Pause was blocked"
     attempts_before = count("a", "RECONNECTING:")
     restart_relay()
     wait_for(lambda: count("a", "RECONNECTING:") > attempts_before, 5)
     time.sleep(0.2)  # A waits for its absent peer inside native TLS setup.
     started = time.monotonic()
-    (root / "a.pause").touch()
+    pause("a")
     assert clients["a"].wait(timeout=2) == 0, "Pause waited for network setup"
     assert time.monotonic() - started < 2, "Pause was blocked by reconnect"
     for side in clients:

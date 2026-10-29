@@ -172,6 +172,30 @@ with tempfile.TemporaryDirectory() as directory:
                 (root / f"{side}.pid").write_text(str(display_workers[":91" if side == "a" else ":92"].pid))
                 start_system(side)
         room = secrets.token_hex(32)  # Public routing ID, not a credential.
+        def pause_client(side):
+            # Control commands need only syntactically valid local settings, not
+            # a credential, enrolled identity, active relay or clipboard backend.
+            control = root / f"{side}.control.json"
+            control.write_text(json.dumps({
+                "version": 1, "relay": f"wss://localhost:{relay_port}/our-clipboard/v1",
+                "room": room, "side": side, "identity_profile": "not-initialized",
+                "peer_name": "not-approved", "offer": f"{side}.offer",
+                "peer_offer": "control-unused.offer", "pause_file": f"{side}.pause",
+                "idle_file": f"{side}.idle", "max_drift_ppm": 1000, "clock_granularity_ms": 1,
+            }))
+            control.chmod(0o600)
+            control_env = dict(check_env)
+            control_env.pop("OUR_CLIPBOARD_RELAY_TOKEN", None)
+            trace = root / f"{side}.control.trace"
+            requested = subprocess.run(["strace", "-f", "-qq", "-e", "trace=connect,listen", "-o", str(trace),
+                                        binary, "pilot", "pause", "--file", str(control)],
+                                       env=control_env, capture_output=True, timeout=5)
+            assert requested.returncode == 0 and b"not acknowledgement" in requested.stdout, "Pause request failed"
+            assert "connect(" not in trace.read_text() and "listen(" not in trace.read_text(), "Pause command used transport/credential IPC"
+            observed = subprocess.run([binary, "pilot", "controls", "--file", str(control)],
+                                      env=control_env, capture_output=True, timeout=5)
+            assert observed.returncode == 0 and b"Local Pause marker: present" in observed.stdout, "Pause marker not observable"
+
         clients = {}
         device_fingerprints = {}
         if signed_offers:
@@ -255,7 +279,7 @@ with tempfile.TemporaryDirectory() as directory:
             from reconnect_scenario import run
             expected_apps, expected_pending, expected_exit = run(
                 root, clients, mode=reconnect_mode, stop_relay=stop_relay, restart_relay=restart_relay,
-                seed=seed, inspect=inspect, status=status, wait_for=wait_for)
+                seed=seed, inspect=inspect, status=status, wait_for=wait_for, pause=pause_client)
         else:
             expected_apps, expected_pending, expected_exit = 3, 1, 0
             # While paused, local copies are not read/published and remote values are
@@ -308,7 +332,7 @@ with tempfile.TemporaryDirectory() as directory:
                 time.sleep(0.5)
                 assert status(root / "a.log").count("ACTIVE:") == active_before, "Replacement login1 unlocked session"
                 assert inspect(":91", "inspect-request"), "Unknown system state wrote clipboard"
-            (root / "a.pause").touch()
+            pause_client("a")
             wait_for(lambda: "PAUSED: session ended" in status(root / "a.log"))
         for side, process in clients.items():
             assert process.wait(timeout=35) == expected_exit, "Pilot exited unsuccessfully"

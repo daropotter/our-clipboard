@@ -622,3 +622,100 @@ fn relay_structured_status_is_content_free_on_pause_and_setup_failure() {
     );
     assert!(!own.exists() && !peer.exists());
 }
+
+#[test]
+#[cfg(feature = "clipboard")]
+fn local_pilot_controls_need_no_credentials_and_never_replace_markers() {
+    let config = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let path = config.path().join("launch.json");
+    let pause = config.path().join("pause");
+    let idle = config.path().join("idle");
+    let mut data = serde_json::json!({
+        "version":1, "relay":"wss://relay.invalid/our-clipboard/v1", "room":"1".repeat(64),
+        "side":"a", "identity_profile":"not-initialized", "peer_name":"not-approved",
+        "offer":"own.offer", "peer_offer":"peer.offer", "max_drift_ppm":1000,
+        "clock_granularity_ms":1, "pause_file":"pause", "idle_file":"idle", "status_json":true
+    });
+    let save = |data: &serde_json::Value| {
+        std::fs::write(&path, data.to_string()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    };
+    let call = |action: &str, extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_our-clipboard"))
+            .args(["pilot", action, "--file", path.to_str().unwrap()])
+            .args(extra)
+            .current_dir(cwd.path())
+            .env(
+                "OUR_CLIPBOARD_CONFIG_DIR",
+                config.path().join("missing-identity-root"),
+            )
+            .env_remove("OUR_CLIPBOARD_RELAY_TOKEN")
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("XDG_SESSION_TYPE")
+            .output()
+            .unwrap()
+    };
+    save(&data);
+    let shown = call("controls", &[]);
+    assert!(shown.status.success());
+    let text = String::from_utf8(shown.stdout).unwrap();
+    assert!(
+        text.contains("Local Pause marker: absent") && text.contains("Local Idle marker: absent")
+    );
+    assert!(!pause.exists() && !idle.exists());
+    assert_eq!(
+        call("pause", &["--replace-clipboard"]).status.code(),
+        Some(2)
+    );
+    assert!(!pause.exists());
+    let requested = call("pause", &[]);
+    assert!(requested.status.success());
+    assert!(
+        String::from_utf8(requested.stdout)
+            .unwrap()
+            .contains("not acknowledgement")
+    );
+    assert!(pause.is_file());
+    assert!(!cwd.path().join("pause").exists());
+    std::fs::write(&pause, b"unrelated contents must survive").unwrap();
+    std::fs::create_dir(&idle).unwrap();
+    assert!(call("pause", &[]).status.success());
+    assert_eq!(
+        std::fs::read(&pause).unwrap(),
+        b"unrelated contents must survive"
+    );
+    let shown = call("controls", &[]);
+    assert!(shown.status.success());
+    let text = String::from_utf8(shown.stdout).unwrap();
+    assert!(
+        text.contains("Local Pause marker: present") && text.contains("Local Idle marker: present")
+    );
+    assert_eq!(
+        std::fs::read(&pause).unwrap(),
+        b"unrelated contents must survive"
+    );
+    data.as_object_mut().unwrap().remove("pause_file");
+    save(&data);
+    assert_eq!(call("pause", &[]).status.code(), Some(2));
+    let shown = call("controls", &[]);
+    assert!(shown.status.success());
+    assert!(
+        String::from_utf8(shown.stdout)
+            .unwrap()
+            .contains("Local Pause marker: not configured")
+    );
+    data["pause_file"] = "missing-parent/pause".into();
+    save(&data);
+    assert_eq!(call("pause", &[]).status.code(), Some(2));
+    assert!(!config.path().join("missing-parent").exists());
+    assert!(!config.path().join("missing-identity-root").exists());
+    assert!(
+        !config.path().join("own.offer").exists() && !config.path().join("peer.offer").exists()
+    );
+}
