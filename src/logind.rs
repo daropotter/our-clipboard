@@ -18,6 +18,7 @@ const SESSION: &str = "org.freedesktop.login1.Session";
 const PATH: &str = "/org/freedesktop/login1";
 const SAMPLE_MS: u64 = 75;
 const MAX_AGE_MS: u64 = 300;
+const ACTIVE_CONFIRM_MS: u64 = SAMPLE_MS;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum State {
     Active,
@@ -27,8 +28,39 @@ pub(crate) enum State {
 #[derive(Default)]
 struct Snapshot {
     sample: Option<(State, u64)>,
+    active_since: Option<u64>,
 }
 impl Snapshot {
+    fn record(&mut self, observation: Option<(State, u64)>, now: u64) {
+        // The old cache must still be fresh when the new query completes. A
+        // slow query cannot bridge a stale interval using its earlier start time.
+        if self
+            .sample
+            .is_none_or(|(_, at)| now < at || now - at > MAX_AGE_MS)
+        {
+            self.active_since = None;
+        }
+        let Some((observed, at)) = observation.filter(|(_, at)| {
+            now >= *at
+                && now - *at <= MAX_AGE_MS
+                && self.sample.is_none_or(|(_, previous)| *at >= previous)
+        }) else {
+            *self = Self::default();
+            return;
+        };
+        let reported = if observed == State::Active {
+            let since = *self.active_since.get_or_insert(at);
+            if at.saturating_sub(since) >= ACTIVE_CONFIRM_MS {
+                State::Active
+            } else {
+                State::Unknown
+            }
+        } else {
+            self.active_since = None;
+            observed
+        };
+        self.sample = Some((reported, at));
+    }
     fn state(&self, now: u64) -> State {
         match self.sample {
             Some((state, at)) if now >= at && now - at <= MAX_AGE_MS => state,
@@ -154,7 +186,11 @@ impl Monitor {
                 let at = SystemBootClock.now_ms().ok();
                 let observed = source.sample();
                 if let Ok(mut output) = output.lock() {
-                    output.sample = observed.zip(at);
+                    if let Ok(now) = SystemBootClock.now_ms() {
+                        output.record(observed.zip(at), now);
+                    } else {
+                        *output = Snapshot::default();
+                    }
                 }
                 thread::sleep(Duration::from_millis(SAMPLE_MS));
             }
@@ -255,11 +291,67 @@ mod tests {
         );
     }
     #[test]
+    fn one_active_sample_between_idle_observations_cannot_unlock() {
+        let mut snapshot = Snapshot::default();
+        snapshot.record(Some((State::Idle, 100)), 100);
+        snapshot.record(Some((State::Active, 175)), 175);
+        assert_eq!(snapshot.state(175), State::Unknown);
+        snapshot.record(Some((State::Idle, 250)), 250);
+        assert_eq!(snapshot.state(250), State::Idle);
+    }
+    #[test]
+    fn active_confirmation_takes_time_but_idle_is_immediate() {
+        let mut snapshot = Snapshot::default();
+        snapshot.record(Some((State::Active, 100)), 100);
+        assert_eq!(snapshot.state(100), State::Unknown);
+        snapshot.record(Some((State::Active, 174)), 174);
+        assert_eq!(snapshot.state(174), State::Unknown);
+        snapshot.record(Some((State::Active, 175)), 175);
+        assert_eq!(snapshot.state(175), State::Active);
+        snapshot.record(Some((State::Idle, 176)), 176);
+        assert_eq!(snapshot.state(176), State::Idle);
+    }
+    #[test]
+    fn missing_or_unknown_observations_require_new_active_confirmation() {
+        for observation in [None, Some((State::Unknown, 200)), Some((State::Idle, 200))] {
+            let mut snapshot = Snapshot::default();
+            snapshot.record(Some((State::Active, 100)), 100);
+            snapshot.record(Some((State::Active, 175)), 175);
+            assert_eq!(snapshot.state(175), State::Active);
+            snapshot.record(observation, 200);
+            assert_ne!(snapshot.state(200), State::Active);
+            snapshot.record(Some((State::Active, 275)), 275);
+            assert_eq!(snapshot.state(275), State::Unknown);
+            snapshot.record(Some((State::Active, 350)), 350);
+            assert_eq!(snapshot.state(350), State::Active);
+        }
+    }
+    #[test]
+    fn stale_late_future_or_regressed_samples_cannot_bridge_active_confirmation() {
+        for (observation, now) in [
+            ((State::Active, 500), 500), // A gap longer than the cache lifetime.
+            ((State::Active, 150), 250), // Query start moved backwards.
+            ((State::Active, 500), 801), // Query completed too late.
+            ((State::Active, 900), 850), // Completion clock moved backwards.
+            ((State::Active, 350), 500), // Start gap is fresh, completion gap is stale.
+        ] {
+            let mut snapshot = Snapshot::default();
+            snapshot.record(Some((State::Active, 100)), 100);
+            snapshot.record(Some((State::Active, 175)), 175);
+            snapshot.record(Some(observation), now);
+            assert_ne!(snapshot.state(now), State::Active);
+            snapshot.record(Some((State::Active, 1000)), 1000);
+            assert_eq!(snapshot.state(1000), State::Unknown);
+            snapshot.record(Some((State::Active, 1075)), 1075);
+            assert_eq!(snapshot.state(1075), State::Active);
+        }
+    }
+    #[test]
     fn missing_stale_or_backward_clock_samples_are_unknown() {
         assert_eq!(Snapshot::default().state(100), State::Unknown);
-        let s = Snapshot {
-            sample: Some((State::Active, 100)),
-        };
+        let mut s = Snapshot::default();
+        s.record(Some((State::Active, 25)), 25);
+        s.record(Some((State::Active, 100)), 100);
         assert_eq!(s.state(100), State::Active);
         assert_eq!(s.state(401), State::Unknown);
         assert_eq!(s.state(99), State::Unknown);
