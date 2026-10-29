@@ -450,7 +450,9 @@ signed samples every five seconds with a 20-second lifetime. See
 assessment fails closed rather than using UTC or renewing TTL.
 
 Stop with Ctrl+C or wait for the five-minute duration. Stop before locking either
-desktop: automatic OS-lock/Idle hooks are not wired yet. Native backend operations
+desktop during this smoke test. The optional `--macos-session-idle` and
+`--logind-idle` observers described above are implemented, but their physical
+lock/suspend behavior still needs separate validation on your actual desktops. Native backend operations
 can still block between duration checks. Automatic discovery, production membership and persistent device enrollment are
 outside this pilot; relay-only reconnect is opt-in as described above.
 
@@ -460,3 +462,39 @@ Xvfb clipboards, signed ACKs, no echo and startup isolation in a private
 network-disabled container. `strace` asserts no endpoint `listen()` call and no
 connection before a rejected fingerprint confirmation. macOS builds and native
 adapter tests run separately; a physical X11↔Mac pair remains a manual validation.
+
+
+## Supervised X11 ↔ macOS smoke-test record
+
+Run this check locally on both unlocked desktops using the outbound commands
+above; neither workstation needs SSH access or an inbound listening port. Use
+synthetic, non-sensitive text only. Keep both terminals visible and stop both
+pilots before locking or suspending either computer.
+
+Record the tested commit, OS versions, X11 desktop/locker and whether each
+optional observer was enabled. Do not attach offers, credentials, clipboard
+contents or raw credential-service diagnostics to a public report. If using
+`--status-json`, drain stdout continuously; see [status semantics](PILOT-STATUS.md).
+
+1. Wait for both READY messages. Confirm that preexisting clipboard contents
+   were not transferred.
+2. Copy a new multiline Unicode sample on X11 and paste on macOS. Require
+   `Applied peer event.` on the receiver and `Peer confirmed application.` on
+   the sender. Repeat in the opposite direction. A send alone is not delivery.
+3. Copy the same sample again as a new copy action. Confirm a new application
+   receipt and no continuing echo between the desktops.
+4. With an explicit `--idle-file` configured, create the receiver's marker and
+   wait for its IDLE acknowledgement. Copy on the active peer. The receiver
+   must not apply or acknowledge application while Idle. Remove only your own
+   marker before the original TTL expires; an eligible latest event may apply
+   once. Repeat with a new event held past its TTL; it must not apply on resume.
+5. With `--pause-file` configured, create that marker (or use
+   [the Pause command](PILOT-CONFIG.md#local-pause-requests-and-marker-inspection)).
+   Wait for the local terminal status/process exit. A marker snapshot alone is
+   not acknowledgement. Restart only with fresh offers and a new quiet period.
+
+Record pass/fail for each direction and each control separately. This smoke test
+establishes supervised delivery and manual control behavior for that pair. It
+does not certify physical screen locking, suspend/resume, automatic reconnect,
+background operation or other desktops. Keep physical lock/suspend testing as a
+separate validation task; neither READY nor `doctor --session` proves it.
