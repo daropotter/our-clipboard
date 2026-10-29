@@ -1,4 +1,4 @@
-//! Supervised two-machine pilot over pinned WSS or pretrusted SSH. No OS Idle hooks.
+//! Supervised two-machine pilot over pinned WSS or pretrusted SSH.
 mod config;
 mod controls;
 mod link;
@@ -43,6 +43,7 @@ const SEND_RETRY_INTERVAL_MS: u64 = 500;
 struct Options {
     stdio: bool,
     status_json: bool,
+    experimental_wayland: bool,
     host: Option<String>,
     program: Option<String>,
     relay: Option<String>,
@@ -67,6 +68,7 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
     let mut o = Options {
         stdio: false,
         status_json: false,
+        experimental_wayland: false,
         host: None,
         program: None,
         relay: None,
@@ -100,6 +102,10 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
         i += 1;
         if name == "--replace-clipboard" {
             consent = true;
+            continue;
+        }
+        if name == "--experimental-wayland" {
+            o.experimental_wayland = true;
             continue;
         }
         if name == "--status-json" {
@@ -249,6 +255,7 @@ fn options(args: &[String]) -> std::result::Result<Options, &'static str> {
             || o.relay_ca.is_some()
             || o.idle_file.is_some()
             || o.pause_file.is_some()
+            || o.experimental_wayland
             || o.logind_idle
             || o.macos_session_idle
             || o.reconnect
@@ -691,7 +698,17 @@ fn session(
             announced_resume = true;
         }
         if !idle && clipboard.is_none() && transport_ready {
-            clipboard = Some(ClipboardSession::new().map_err(|_| Error::Worker)?);
+            clipboard = Some(if o.experimental_wayland {
+                ClipboardSession::new_data_control().map_err(|_| {
+                    eprintln!("[{role}] Native Wayland data-control session unavailable; no GNOME or XWayland pilot fallback.");
+                    Error::Worker
+                })?
+            } else {
+                ClipboardSession::new().map_err(|_| Error::Worker)?
+            });
+            if o.experimental_wayland {
+                eprintln!("[{role}] Experimental native Wayland data-control session initialized.");
+            }
             eprintln!(
                 "[{role}] READY: copy new text now. Pilot changes the peer clipboard; contents are never logged."
             );
@@ -1046,6 +1063,17 @@ fn protocol_stdout() -> std::result::Result<std::fs::File, &'static str> {
     Err("This SSH pilot currently supports Linux and macOS endpoints.")
 }
 fn platform_options(o: &Options) -> std::result::Result<(), &'static str> {
+    #[cfg(not(target_os = "linux"))]
+    if o.experimental_wayland {
+        return Err(
+            "--experimental-wayland requires Linux native Wayland data-control; no fallback.",
+        );
+    }
+    if o.experimental_wayland && o.logind_idle {
+        return Err(
+            "--logind-idle is currently X11-only; do not combine it with --experimental-wayland. Use explicit local Idle/Pause markers.",
+        );
+    }
     #[cfg(not(target_os = "macos"))]
     if o.macos_session_idle {
         return Err("--macos-session-idle requires macOS; no fallback is enabled.");
@@ -1059,9 +1087,29 @@ fn platform_options(o: &Options) -> std::result::Result<(), &'static str> {
     let _ = o;
     Ok(())
 }
+// Environment selection only; no native connection or clipboard access.
+fn backend_options(o: &Options) -> std::result::Result<(), &'static str> {
+    #[cfg(target_os = "linux")]
+    {
+        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some_and(|s| !s.is_empty())
+            || std::env::var("XDG_SESSION_TYPE").is_ok_and(|s| s == "wayland");
+        if wayland && !o.experimental_wayland {
+            return Err(
+                "Native Wayland relay pilot requires explicit --experimental-wayland; default X11/macOS mode does not fall back.",
+            );
+        }
+        if o.experimental_wayland && !wayland {
+            return Err(
+                "--experimental-wayland requires a native Wayland session; X11 fallback is disabled.",
+            );
+        }
+    }
+    let _ = o;
+    Ok(())
+}
 pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
     if matches!(args,[arg] if arg=="--help"||arg=="-h") {
-        return Ok("Usage: our-clipboard pilot --config FILE --replace-clipboard\n       our-clipboard pilot config-check --file FILE\n       our-clipboard pilot preflight --file FILE\n       our-clipboard pilot pause --file FILE\n       our-clipboard pilot controls --file FILE\nOr: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nOptional --status-json emits versioned content-free JSON Lines on stdout in relay mode; human diagnostics remain on stderr. See docs/PILOT-STATUS.md. Optional --identity-profile PROFILE uses an explicitly initialized system-store identity to sign fresh offers; BOTH sides must use signed mode and confirm device fingerprints. Optional --peer-name NAME selects an existing local peer approval and verifies the signed offer without a prompt; requires --identity-profile. Missing/corrupt/changed trust stops, never enrolls or replaces. Optional --reconnect retries transport loss within the same live authenticated session, without renewing TTL. Relay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. Optional --macos-session-idle observes the macOS caller/console state (experimental registry schema; unknown/stale means Idle). Optional --logind-idle observes the Linux/X11 logind session (unknown/stale means Idle). Optional --idle-file FILE pauses while the marker exists; metadata errors stop the pilot. This injects Idle state, not automatic screen-lock detection. Optional --pause-file FILE ends the session and discards pending text when present; resuming requires fresh pilots/offers. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
+        return Ok("Usage: our-clipboard pilot --config FILE --replace-clipboard\n       our-clipboard pilot config-check --file FILE\n       our-clipboard pilot preflight --file FILE\n       our-clipboard pilot pause --file FILE\n       our-clipboard pilot controls --file FILE\nOr: our-clipboard pilot --replace-clipboard --relay wss://HOST/our-clipboard/v1 --room HEX --side a|b --offer FILE --peer-offer FILE --max-drift-ppm N --clock-granularity-ms N\nOr: our-clipboard pilot --replace-clipboard --ssh USER@HOST --remote-program /absolute/binary --max-drift-ppm N --clock-granularity-ms N [--seconds 300] [--ttl-ms 30000]\n\nOptional --experimental-wayland opts into the Linux native data-control relay pilot (not GNOME, no XWayland fallback); see docs/WAYLAND-PILOT.md. Optional --status-json emits versioned content-free JSON Lines on stdout in relay mode; human diagnostics remain on stderr. See docs/PILOT-STATUS.md. Optional --identity-profile PROFILE uses an explicitly initialized system-store identity to sign fresh offers; BOTH sides must use signed mode and confirm device fingerprints. Optional --peer-name NAME selects an existing local peer approval and verifies the signed offer without a prompt; requires --identity-profile. Missing/corrupt/changed trust stops, never enrolls or replaces. Optional --reconnect retries transport loss within the same live authenticated session, without renewing TTL. Relay mode requires OUR_CLIPBOARD_RELAY_TOKEN and independent public-offer fingerprint confirmation, with no SSH or listener on either client. Optional --macos-session-idle observes the macOS caller/console state (experimental registry schema; unknown/stale means Idle). Optional --logind-idle observes the Linux/X11 logind session (unknown/stale means Idle). Optional --idle-file FILE pauses while the marker exists; metadata errors stop the pilot. This injects Idle state, not automatic screen-lock detection. Optional --pause-file FILE ends the session and discards pending text when present; resuming requires fresh pilots/offers. SSH mode requires an existing trusted SSH connection. Wait for both READY statuses. Linux/macOS supervised testing; see docs/OUTBOUND-PILOT.md (relay) or docs/PILOT.md (SSH).".into());
     }
     if let Some(result) = controls::command(args) {
         return result;
@@ -1089,14 +1137,7 @@ pub fn run(args: &[String]) -> std::result::Result<String, &'static str> {
             "PAUSED: pilot not started; remove the marker before creating a fresh session.".into(),
         );
     }
-    #[cfg(target_os = "linux")]
-    if std::env::var_os("WAYLAND_DISPLAY").is_some()
-        || std::env::var("XDG_SESSION_TYPE").is_ok_and(|v| v == "wayland")
-    {
-        return Err(
-            "The supervised pilot currently supports X11 on Linux and macOS; native Wayland pilot integration is pending.",
-        );
-    }
+    backend_options(&o)?;
 
     if o.stdio && (std::io::stdin().is_terminal() || std::io::stdout().is_terminal()) {
         return Err("Internal pilot --stdio requires a pipe, never a terminal.");
@@ -1209,6 +1250,9 @@ mod relay_tests {
         assert!(options(&structured).is_ok_and(|o| o.status_json));
         structured.push("--status-json".into());
         assert!(options(&structured).is_err());
+        let mut native_wayland = base.clone();
+        native_wayland.push("--experimental-wayland".into());
+        assert!(options(&native_wayland).is_ok_and(|o| o.experimental_wayland));
         let mut signed = base.clone();
         signed.extend(["--identity-profile".into(), "workstation".into()]);
         assert!(
@@ -1237,6 +1281,9 @@ mod relay_tests {
         let mut structured_ssh = ssh_named.clone();
         structured_ssh.push("--status-json".into());
         assert!(options(&structured_ssh).is_err());
+        let mut wayland_ssh = ssh_named.clone();
+        wayland_ssh.push("--experimental-wayland".into());
+        assert!(options(&wayland_ssh).is_err());
         ssh_named.extend(["--peer-name".into(), "remote".into()]);
         assert!(options(&ssh_named).is_err());
         let ssh_signed = [

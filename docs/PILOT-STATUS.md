@@ -5,7 +5,8 @@ in a [launch file](PILOT-CONFIG.md). The default is false. This enables a
 version 1 JSON Lines stream on stdout; human diagnostics and fingerprint prompts
 remain on stderr. It adds no listener, status file, enrollment or clipboard consent.
 SSH/stdio mode rejects this option because its stdout is a binary protocol pipe.
-The pilot remains experimental on Linux/X11 and macOS.
+The pilot remains experimental on Linux/X11 and macOS, with a separate explicit
+[native Wayland data-control opt-in](WAYLAND-PILOT.md).
 
 For example, enable `status_json` in a launch file, then run:
 

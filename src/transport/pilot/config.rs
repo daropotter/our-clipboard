@@ -26,6 +26,8 @@ struct Launch {
     #[serde(default)]
     status_json: bool,
     #[serde(default)]
+    experimental_wayland: bool,
+    #[serde(default)]
     logind_idle: bool,
     #[serde(default)]
     macos_session_idle: bool,
@@ -142,6 +144,7 @@ pub(super) fn load(path: &Path) -> std::result::Result<Vec<String>, &'static str
     for (key, enabled) in [
         ("--reconnect", data.reconnect),
         ("--status-json", data.status_json),
+        ("--experimental-wayland", data.experimental_wayland),
         ("--logind-idle", data.logind_idle),
         ("--macos-session-idle", data.macos_session_idle),
     ] {
@@ -217,8 +220,15 @@ mod tests {
         assert!(!args.iter().any(|s| s == "--status-json"));
         let mut structured = sample();
         structured["status_json"] = true.into();
+        structured["experimental_wayland"] = true.into();
         save(&path, structured.to_string()).unwrap();
         assert!(load(&path).unwrap().iter().any(|s| s == "--status-json"));
+        assert!(
+            load(&path)
+                .unwrap()
+                .iter()
+                .any(|s| s == "--experimental-wayland")
+        );
         save(&path, sample().to_string()).unwrap();
         let own = &args[args.iter().position(|s| s == "--offer").unwrap() + 1];
         assert_eq!(

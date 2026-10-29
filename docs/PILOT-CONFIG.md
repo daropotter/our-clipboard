@@ -65,6 +65,8 @@ separately; configuration files cannot select them.
 
 Optional fields are `seconds` (default 300), `ttl_ms` (default 30000), `relay_ca`,
 `idle_file`, `pause_file`, `reconnect`, `logind_idle` and `macos_session_idle`.
+Optional `experimental_wayland` explicitly selects the Linux native data-control
+[experimental relay pilot](WAYLAND-PILOT.md); its default is false.
 Optional `status_json` enables [structured runtime status](PILOT-STATUS.md).
 Optional booleans default to false. Numeric bounds and duration-versus-quiet-period
 checks are shared with the existing CLI. Native observation flags retain their
@@ -103,7 +105,7 @@ our-clipboard pilot preflight --file /path/to/run/x11.json
 ```
 
 Unlike `config-check`, this may access/unlock the OS credential service. It checks
-platform-specific option compatibility, local Pause/Idle marker metadata, that the
+platform-specific option compatibility and session-environment selection, local Pause/Idle marker metadata, that the
 own offer path is unused, the environment credential's format, configured CA
 parsing, the existing local identity/public pin and the selected owner-signed peer
 approval. A configured Pause marker returns PAUSED before credential/trust access.

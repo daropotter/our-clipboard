@@ -719,3 +719,95 @@ fn local_pilot_controls_need_no_credentials_and_never_replace_markers() {
         !config.path().join("own.offer").exists() && !config.path().join("peer.offer").exists()
     );
 }
+
+#[test]
+#[cfg(feature = "clipboard")]
+fn experimental_wayland_is_explicit_native_only_and_rejects_logind() {
+    let root = tempfile::tempdir().unwrap();
+    let own = root.path().join("own.offer");
+    let peer = root.path().join("peer.offer");
+    let call = |flag: bool, native: bool, logind: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_our-clipboard"));
+        command
+            .args([
+                "pilot",
+                "--replace-clipboard",
+                "--relay",
+                "wss://relay.invalid/our-clipboard/v1",
+                "--room",
+                &"1".repeat(64),
+                "--side",
+                "a",
+                "--offer",
+                own.to_str().unwrap(),
+                "--peer-offer",
+                peer.to_str().unwrap(),
+                "--max-drift-ppm",
+                "1000",
+                "--clock-granularity-ms",
+                "1",
+            ])
+            .env_remove("OUR_CLIPBOARD_RELAY_TOKEN")
+            .env_remove("WAYLAND_SOCKET");
+        if flag {
+            command.arg("--experimental-wayland");
+        }
+        if logind {
+            command.arg("--logind-idle");
+        }
+        if native {
+            command
+                .env("WAYLAND_DISPLAY", "missing-wayland-socket")
+                .env("DISPLAY", ":99")
+                .env("XDG_SESSION_TYPE", "wayland");
+        } else {
+            command
+                .env_remove("WAYLAND_DISPLAY")
+                .env_remove("DISPLAY")
+                .env("XDG_SESSION_TYPE", "x11");
+        }
+        command.output().unwrap()
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let denied = call(false, true, false);
+        assert_eq!(denied.status.code(), Some(2));
+        assert!(
+            String::from_utf8(denied.stderr)
+                .unwrap()
+                .contains("explicit --experimental-wayland")
+        );
+        let x11 = call(true, false, false);
+        assert_eq!(x11.status.code(), Some(2));
+        assert!(
+            String::from_utf8(x11.stderr)
+                .unwrap()
+                .contains("X11 fallback is disabled")
+        );
+        let accepted_options = call(true, true, false);
+        assert_eq!(accepted_options.status.code(), Some(2));
+        assert!(
+            String::from_utf8(accepted_options.stderr)
+                .unwrap()
+                .contains("OUR_CLIPBOARD_RELAY_TOKEN")
+        );
+        let incompatible = call(true, true, true);
+        assert_eq!(incompatible.status.code(), Some(2));
+        assert!(
+            String::from_utf8(incompatible.stderr)
+                .unwrap()
+                .contains("X11-only")
+        );
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let unsupported = call(true, true, false);
+        assert_eq!(unsupported.status.code(), Some(2));
+        assert!(
+            String::from_utf8(unsupported.stderr)
+                .unwrap()
+                .contains("requires Linux native Wayland")
+        );
+    }
+    assert!(!own.exists() && !peer.exists());
+}

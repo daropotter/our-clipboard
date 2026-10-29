@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "relay": "wss://relay.example/our-clipboard/v1",
+  "room": "1111111111111111111111111111111111111111111111111111111111111111",
+  "side": "a",
+  "identity_profile": "workstation",
+  "peer_name": "mac",
+  "offer": "wayland.offer",
+  "peer_offer": "mac-for-wayland.offer",
+  "max_drift_ppm": 1000,
+  "clock_granularity_ms": 1,
+  "seconds": 300,
+  "ttl_ms": 30000,
+  "reconnect": true,
+  "idle_file": "idle",
+  "pause_file": "pause",
+  "experimental_wayland": true
+}

@@ -19,6 +19,7 @@ launch_config = os.environ.get("OUR_CLIPBOARD_TEST_LAUNCH_CONFIG") == "1"
 named_peers = os.environ.get("OUR_CLIPBOARD_TEST_NAMED_PEERS") == "1"
 enroll_peers = os.environ.get("OUR_CLIPBOARD_TEST_ENROLL_PEERS") == "1"
 signed_offers = os.environ.get("OUR_CLIPBOARD_TEST_SIGNED_OFFERS") == "1"
+wayland_mode = os.environ.get("OUR_CLIPBOARD_TEST_WAYLAND") == "1"
 external = os.environ.get("OUR_CLIPBOARD_EXTERNAL_RELAY") == "1"
 if launch_config and not named_peers:
     raise SystemExit("Launch fixture requires explicitly approved named peers")
@@ -26,7 +27,10 @@ if (named_peers or enroll_peers) and not signed_offers:
     raise SystemExit("Named peer fixture requires signed offers")
 if signed_offers and external:
     raise SystemExit("Signed-offer fixtures require a private disposable keyring and relay")
-relay_port = 8443 if external else 443
+if wayland_mode and (external or logind_fixture or os.geteuid() == 0):
+    raise SystemExit("Wayland fixture requires a disposable non-root container without external relay/logind")
+backend_env = {}
+relay_port = 8443 if external or wayland_mode else 443
 children = []
 handles = []
 
@@ -51,14 +55,19 @@ def wait_for(check, seconds=10):
         time.sleep(0.05)
     raise AssertionError("Timed out; clipboard content and credentials omitted")
 
+def display_environment(display, base=None):
+    env = dict(os.environ if base is None else base)
+    env.pop("WAYLAND_DISPLAY", None)
+    env.pop("WAYLAND_SOCKET", None)
+    env.update(backend_env.get(display, {"DISPLAY": display, "XDG_SESSION_TYPE": "x11"}))
+    return env
+
 def inspect(display, mode):
-    env = dict(os.environ, DISPLAY=display, XDG_SESSION_TYPE="x11")
-    return subprocess.run([helper, "--replace-clipboard", mode], env=env,
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    return subprocess.run([helper, "--replace-clipboard", mode], env=display_environment(display),
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5).returncode == 0
 
 def seed(display, mode):
-    return spawn([helper, "--replace-clipboard", mode],
-                 env=dict(os.environ, DISPLAY=display, XDG_SESSION_TYPE="x11"))
+    return spawn([helper, "--replace-clipboard", mode], env=display_environment(display))
 
 def status(path):
     return path.read_text() if path.exists() else ""
@@ -76,8 +85,32 @@ with tempfile.TemporaryDirectory() as directory:
     try:
         display_workers = {}
         for display in (":91", ":92"):
-            display_workers[display] = spawn(["Xvfb", display, "-screen", "0", "1280x720x24", "-nolisten", "tcp"])
+            if wayland_mode and display == ":91":
+                runtime = root / "wayland-runtime"
+                runtime.mkdir(mode=0o700)
+                native = dict(os.environ, XDG_RUNTIME_DIR=str(runtime), XDG_SESSION_TYPE="wayland",
+                              WLR_BACKENDS="headless", WLR_LIBINPUT_NO_DEVICES="1", WLR_RENDERER="pixman")
+                native.pop("DISPLAY", None)
+                native.pop("WAYLAND_DISPLAY", None)
+                native.pop("WAYLAND_SOCKET", None)
+                display_workers[display] = spawn(["sway", "--unsupported-gpu", "--config", "/dev/null"],
+                                                 env=native, log=root / "compositor.log")
+                wait_for(lambda: any(p.is_socket() for p in runtime.glob("wayland-*")))
+                wayland_socket = next(p.name for p in runtime.glob("wayland-*") if p.is_socket())
+                # A valid X11 display deliberately remains reachable: fallback must not use it.
+                backend_env[display] = {k: native[k] for k in ("XDG_RUNTIME_DIR", "XDG_SESSION_TYPE")}
+                backend_env[display].update(WAYLAND_DISPLAY=wayland_socket, DISPLAY=":92")
+            else:
+                display_workers[display] = spawn(["Xvfb", display, "-screen", "0", "1280x720x24", "-nolisten", "tcp"])
             wait_for(lambda: inspect(display, "check-display"))
+        if wayland_mode:
+            doctor = subprocess.run([binary, "doctor", "--clipboard"], env=display_environment(":91"), capture_output=True, timeout=5)
+            assert doctor.returncode == 0 and b"Wayland data-control" in doctor.stdout, "Fixture did not select native Wayland"
+            missing_env = display_environment(":91")
+            missing_env["WAYLAND_DISPLAY"] = "missing-wayland-socket"
+            refused = subprocess.run([helper, "--replace-clipboard", "check-data-control"],
+                                     env=missing_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+            assert refused.returncode == 2, "Unavailable Wayland backend fell back to reachable X11"
         cert, key = root / "relay.pem", root / "relay.key"
         if external:
             cert = Path("/tls/fullchain.pem")
@@ -94,7 +127,7 @@ with tempfile.TemporaryDirectory() as directory:
         env.pop("WAYLAND_SOCKET", None)
         server = None
         if not external:
-            server = spawn([binary, "relay", "--listen", "127.0.0.1:443", "--tls-cert", str(cert),
+            server = spawn([binary, "relay", "--listen", f"127.0.0.1:{relay_port}", "--tls-cert", str(cert),
                             "--tls-key", str(key)], env=env, log=root / "relay.log")
         def listening():
             if server is not None and server.poll() is not None:
@@ -115,7 +148,7 @@ with tempfile.TemporaryDirectory() as directory:
             server_env = dict(env)
             if wrong_token:
                 server_env["OUR_CLIPBOARD_RELAY_TOKEN"] = secrets.token_hex(32)
-            server = spawn([binary, "relay", "--listen", "127.0.0.1:443", "--tls-cert", str(cert),
+            server = spawn([binary, "relay", "--listen", f"127.0.0.1:{relay_port}", "--tls-cert", str(cert),
                             "--tls-key", str(key)], env=server_env, log=root / "relay.log")
             wait_for(listening)
         check_env = dict(env)
@@ -207,12 +240,14 @@ with tempfile.TemporaryDirectory() as directory:
                 device_fingerprints[side] = result.stdout.decode().splitlines()[0].split(": ", 1)[1]
         (root / "a.idle").touch()  # Start without initializing a native observer.
         for side, display, peer in (("a", ":91", "b"), ("b", ":92", "a")):
-            args = ["strace", "-f", "-qq", "-e", "trace=listen", "-o", str(root / f"{side}.trace"),
+            args = ["strace", "-f", "-qq", "-e", "trace=listen,connect" if wayland_mode else "trace=listen", "-o", str(root / f"{side}.trace"),
                     binary, "pilot", "--replace-clipboard", "--status-json", "--relay", f"wss://localhost:{relay_port}/our-clipboard/v1",
                     "--relay-ca", str(cert), "--room", room, "--side", side,
                     "--offer", str(root / f"{side}.offer"), "--peer-offer", str(root / f"{peer}-for-{side}.offer"),
                     "--seconds", "90" if reconnect_mode == "stale" else "30" if reconnect_mode else "14", "--ttl-ms", "30000" if reconnect_mode == "stale" else "3000" if reconnect_mode else "1000", "--idle-file", str(root / f"{side}.idle"), "--pause-file", str(root / f"{side}.pause"), "--max-drift-ppm", "1000",
                     "--clock-granularity-ms", "1"]
+            if wayland_mode and side == "a":
+                args.append("--experimental-wayland")
             if signed_offers:
                 args.extend(["--identity-profile", "pilot-" + side])
             if named_peers:
@@ -229,6 +264,7 @@ with tempfile.TemporaryDirectory() as directory:
                     "idle_file": f"{side}.idle", "pause_file": f"{side}.pause", "seconds": 30,
                     "ttl_ms": 3000, "max_drift_ppm": 1000, "clock_granularity_ms": 1,
                     "reconnect": bool(reconnect_mode), "status_json": True,
+                    "experimental_wayland": wayland_mode and side == "a",
                 }
                 launch = root / f"{side}.json"
                 launch.write_text(json.dumps(settings))
@@ -237,12 +273,21 @@ with tempfile.TemporaryDirectory() as directory:
                                          env=env, capture_output=True, timeout=5)
                 assert checked.returncode == 0 and b"No credentials" in checked.stdout, "Launch static validation failed"
                 from preflight_scenario import check as check_local_preflight
-                check_local_preflight(root, binary, env, settings, side, device_fingerprints)
+                check_local_preflight(root, binary, display_environment(display, env), settings, side, device_fingerprints)
                 # The fixture cwd is /tmp, not the configuration's temporary directory.
                 args = args[:args.index("pilot") + 1] + ["--config", str(launch), "--replace-clipboard"]
-            clients[side] = spawn(args, env=dict(system_env.get(side, env), DISPLAY=display),
+            clients[side] = spawn(args, env=display_environment(display, system_env.get(side, env)),
                                   stdin=subprocess.PIPE, log=root / f"{side}.log",
                                   json_log=root / f"{side}.jsonl")
+        if wayland_mode:
+            denied_env = display_environment(":91", env)
+            denied_env.pop("OUR_CLIPBOARD_RELAY_TOKEN", None)
+            denied = subprocess.run([binary, "pilot", "--replace-clipboard", "--relay", f"wss://localhost:{relay_port}/our-clipboard/v1",
+                                     "--room", room, "--side", "a", "--offer", str(root / "denied.offer"),
+                                     "--peer-offer", str(root / "missing.offer"), "--max-drift-ppm", "1000", "--clock-granularity-ms", "1"],
+                                    env=denied_env, capture_output=True, timeout=5)
+            assert denied.returncode == 2 and b"explicit --experimental-wayland" in denied.stderr, "Wayland opt-in was not required"
+            assert not (root / "denied.offer").exists(), "Rejected Wayland request published an offer"
         wait_for(lambda: offer_ready(root / "a.offer") and offer_ready(root / "b.offer"))
         for side, peer in (("a", "b"), ("b", "a")):
             data = (root / f"{peer}.offer").read_bytes()
@@ -282,35 +327,37 @@ with tempfile.TemporaryDirectory() as directory:
                 seed=seed, inspect=inspect, status=status, wait_for=wait_for, pause=pause_client)
         else:
             expected_apps, expected_pending, expected_exit = 3, 1, 0
+            idle_receiver, active_sender = ("a", "b") if wayland_mode else ("b", "a")
+            idle_display, source_display = (":91", ":92") if wayland_mode else (":92", ":91")
             # While paused, local copies are not read/published and remote values are
             # buffered without writes/ACKs. Expiry keeps its original signed TTL.
-            enter_idle("b")
-            local_before = status(root / "b.log").count("New local copy selected.")
-            seed(":92", "seed-request")
+            enter_idle(idle_receiver)
+            local_before = status(root / f"{idle_receiver}.log").count("New local copy selected.")
+            seed(idle_display, "seed-request")
             time.sleep(0.2)
-            assert inspect(":91", "inspect-response"), "Idle local copy was published"
-            seed(":91", "seed-response")
-            wait_for(lambda: "Peer event buffered while Idle" in status(root / "b.log"))
-            assert inspect(":92", "inspect-request"), "Idle remote event wrote clipboard"
+            assert inspect(source_display, "inspect-response"), "Idle local copy was published"
+            seed(source_display, "seed-response")
+            wait_for(lambda: "Peer event buffered while Idle" in status(root / f"{idle_receiver}.log"))
+            assert inspect(idle_display, "inspect-request"), "Idle remote event wrote clipboard"
             time.sleep(1.4)
-            leave_idle("b")
-            wait_for(lambda: "ACTIVE:" in status(root / "b.log"))
+            leave_idle(idle_receiver)
+            wait_for(lambda: "ACTIVE:" in status(root / f"{idle_receiver}.log"))
             time.sleep(0.4)
-            assert inspect(":92", "inspect-request"), "Expired Idle event was applied"
-            assert inspect(":91", "inspect-response"), "Paused copy was replayed on resume"
-            assert status(root / "b.log").count("New local copy selected.") == local_before, "Observer replayed an Idle change"
+            assert inspect(idle_display, "inspect-request"), "Expired Idle event was applied"
+            assert inspect(source_display, "inspect-response"), "Paused copy was replayed on resume"
+            assert status(root / f"{idle_receiver}.log").count("New local copy selected.") == local_before, "Observer replayed an Idle change"
             # A new copy after resuming is observable, even with the same payload.
-            seed(":92", "seed-response")
-            wait_for(lambda: status(root / "b.log").count("Peer confirmed application.") == 2)
+            seed(idle_display, "seed-response")
+            wait_for(lambda: status(root / f"{idle_receiver}.log").count("Peer confirmed application.") == 2)
             # A fresh pending value is applied once after resume, without TTL renewal.
-            enter_idle("b")
-            buffered_before = status(root / "b.log").count("Peer event buffered while Idle")
-            seed(":91", "seed-request")
-            wait_for(lambda: status(root / "b.log").count("Peer event buffered while Idle") > buffered_before)
-            assert inspect(":92", "inspect-response"), "Idle buffer wrote before resume"
-            leave_idle("b")
-            wait_for(lambda: inspect(":92", "inspect-request"))
-            wait_for(lambda: status(root / "a.log").count("Peer confirmed application.") == 2)
+            enter_idle(idle_receiver)
+            buffered_before = status(root / f"{idle_receiver}.log").count("Peer event buffered while Idle")
+            seed(source_display, "seed-request")
+            wait_for(lambda: status(root / f"{idle_receiver}.log").count("Peer event buffered while Idle") > buffered_before)
+            assert inspect(idle_display, "inspect-response"), "Idle buffer wrote before resume"
+            leave_idle(idle_receiver)
+            wait_for(lambda: inspect(idle_display, "inspect-request"))
+            wait_for(lambda: status(root / f"{active_sender}.log").count("Peer confirmed application.") == 2)
             # Manual Pause ends the authenticated session; unlike Idle it cannot resume.
             enter_idle("a")
             seed(":92", "seed-response")
@@ -337,6 +384,10 @@ with tempfile.TemporaryDirectory() as directory:
         for side, process in clients.items():
             assert process.wait(timeout=35) == expected_exit, "Pilot exited unsuccessfully"
             assert "listen(" not in (root / f"{side}.trace").read_text(), "Endpoint tried to listen"
+        if wayland_mode:
+            assert "X11-unix" not in (root / "a.trace").read_text(), "Wayland pilot connected to X11"
+            assert "Experimental native Wayland data-control session initialized." in status(root / "a.log"), "No native data-control session"
+            print("Experimental Wayland/X11 pilot passed with data-control, a reachable unused X11 display and no XWayland fallback")
         bad_args = ["strace", "-f", "-qq", "-e", "trace=listen,connect", "-o", str(root / "bad.trace"),
                      binary, "pilot", "--replace-clipboard", "--relay", f"wss://localhost:{relay_port}/our-clipboard/v1",
                      "--relay-ca", str(cert), "--room", room, "--side", "a", "--offer", str(root / "bad.offer"),
@@ -420,7 +471,7 @@ with tempfile.TemporaryDirectory() as directory:
         print("Outbound WSS pilot passed: Idle startup/pause/resume/TTL, real HTTPS, pinned peer TLS, independent confirmations, startup isolation, bidirectional writes/ACKs and no client listen syscall.")
     except Exception:
         # Application statuses contain only public fingerprints and static operation names.
-        for name in ("a.log", "b.log", "relay.log"):
+        for name in ("a.log", "b.log", "relay.log", "compositor.log"):
             if (root / name).exists():
                 print(status(root / name), file=sys.stderr)
         raise

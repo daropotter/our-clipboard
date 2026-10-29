@@ -11,6 +11,7 @@ fn check(path: &Path) -> std::result::Result<String, &'static str> {
     {
         return Ok("PAUSED: local preflight skipped; no credentials, peer trust, transport or clipboard accessed.".into());
     }
+    backend_options(&o)?;
     let idle = idle_requested(o.idle_file.as_deref())
         .map_err(|_| "Idle marker metadata unavailable; preflight stopped.")?;
     match std::fs::symlink_metadata(o.offer.as_ref().unwrap()) {

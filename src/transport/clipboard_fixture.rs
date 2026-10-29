@@ -365,7 +365,11 @@ fn controller() -> Result<()> {
 
 /// Fixed synthetic integration roles, invoked only by the explicitly destructive example.
 pub fn run(mode: &str) -> std::result::Result<String, &'static str> {
-    if !cfg!(target_os = "linux") || std::env::var_os("WAYLAND_DISPLAY").is_some() {
+    if !cfg!(target_os = "linux")
+        || (matches!(mode, "controller" | "receiver")
+            && (std::env::var_os("WAYLAND_DISPLAY").is_some()
+                || std::env::var("XDG_SESSION_TYPE").is_ok_and(|s| s == "wayland")))
+    {
         return Err(
             "This fixture requires disposable Linux X11 sessions, without Wayland fallback.",
         );
@@ -405,6 +409,9 @@ pub fn run(mode: &str) -> std::result::Result<String, &'static str> {
                 thread::sleep(Duration::from_secs(90));
                 Ok(())
             }
+            "check-data-control" => ClipboardSession::new_data_control()
+                .map(|_| ())
+                .map_err(|_| Error::Worker),
             "check-display" => TextClipboard::new().map(|_| ()).map_err(|_| Error::Worker),
             _ => Err(Error::Setup),
         }
