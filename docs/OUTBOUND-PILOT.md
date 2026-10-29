@@ -8,6 +8,10 @@ end to end. The relay cannot read clipboard text or issue a valid peer identity.
 This is a supervised two-computer pilot. A separate reachable relay is required;
 this repository does not provision hosting or silently choose a public provider.
 
+For an explicitly enabled native Linux data-control endpoint, see the
+[experimental Wayland pilot](WAYLAND-PILOT.md). Its tested scope is narrower than
+general compositor support.
+
 ## Relay operator
 
 The authorized [stage deployment](../deploy/stage/README.md) is available at

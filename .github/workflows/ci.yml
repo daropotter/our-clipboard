@@ -179,6 +179,27 @@ jobs:
             -v "$PWD/tests/identity/peer_pin_scenario.py:/peer_pin_scenario.py:ro" \
             -v "$PWD/tests/identity/run-relay.sh:/run-signed-relay.sh:ro" \
             our-clipboard-signed-relay-tests bash /run-signed-relay.sh /pilot /helper
+  wayland-relay-pilot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked --bin our-clipboard --example synthetic-clipboard-sync
+      - run: docker build -t our-clipboard-tests -f tests/linux/Dockerfile .
+      - run: docker build -t our-clipboard-relay-tests -f tests/linux/Dockerfile.relay .
+      - run: docker build -t our-clipboard-signed-relay-tests -f tests/identity/Dockerfile.relay .
+      - name: Experimental native Sway and X11 over WSS, signed identity and reconnect
+        run: |
+          docker run --rm --user tester --network none -e OUR_CLIPBOARD_TEST_WAYLAND=1 \
+            -v "$PWD/target/debug/our-clipboard:/pilot:ro" \
+            -v "$PWD/target/debug/examples/synthetic-clipboard-sync:/helper:ro" \
+            -v "$PWD/tests/linux/run-relay-pilot.py:/run-relay-pilot.py:ro" \
+            -v "$PWD/tests/linux/reconnect_scenario.py:/reconnect_scenario.py:ro" \
+            -v "$PWD/tests/identity/preflight_scenario.py:/preflight_scenario.py:ro" \
+            -v "$PWD/tests/identity/peer_pin_scenario.py:/peer_pin_scenario.py:ro" \
+            -v "$PWD/tests/identity/run-relay.sh:/run-signed-relay.sh:ro" \
+            our-clipboard-signed-relay-tests bash /run-signed-relay.sh /pilot /helper
   logind-idle:
     runs-on: ubuntu-24.04
     timeout-minutes: 10

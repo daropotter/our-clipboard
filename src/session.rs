@@ -8,13 +8,29 @@ pub struct ClipboardSession {
     tagged: TaggedClipboard,
     watcher: Watcher,
     marker: [u8; 32],
+    data_control_only: bool,
 }
 
 impl ClipboardSession {
     pub fn new() -> Result<Self, &'static str> {
-        let clipboard = TextClipboard::new()?;
+        Self::with_clipboard(TextClipboard::new()?, false)
+    }
+
+    /// Experimental pilot requires the data-control backend, never GNOME/XWayland.
+    pub(crate) fn new_data_control() -> Result<Self, &'static str> {
+        Self::with_clipboard(TextClipboard::new_data_control()?, true)
+    }
+
+    fn with_clipboard(
+        clipboard: TextClipboard,
+        data_control_only: bool,
+    ) -> Result<Self, &'static str> {
         let tagged = TaggedClipboard::new(clipboard.backend_name())?;
-        let watcher = Watcher::new()?;
+        let watcher = if data_control_only {
+            Watcher::new_data_control()?
+        } else {
+            Watcher::new()?
+        };
         let mut marker = [0; 32];
         getrandom::fill(&mut marker).map_err(|_| "Could not create a clipboard session marker.")?;
         Ok(Self {
@@ -22,13 +38,18 @@ impl ClipboardSession {
             tagged,
             watcher,
             marker,
+            data_control_only,
         })
     }
 
     /// Rebaseline notifications after Idle without reading text or releasing ownership.
     /// Changes made while paused become the baseline, never new local publications.
     pub fn rebaseline_observer(&mut self) -> Result<(), &'static str> {
-        self.watcher = Watcher::new()?;
+        self.watcher = if self.data_control_only {
+            Watcher::new_data_control()?
+        } else {
+            Watcher::new()?
+        };
         Ok(())
     }
 

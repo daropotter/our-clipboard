@@ -1,4 +1,4 @@
-//! Test fixture only: requires two explicitly configured disposable X11 displays.
+//! Test fixture only: disposable native clipboards; controller/receiver require X11.
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let [consent, mode] = args.as_slice() else {

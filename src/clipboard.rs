@@ -47,6 +47,20 @@ impl TextClipboard {
         })
     }
 
+    /// Native data-control only: no GNOME adapter or X11 fallback, even on failure.
+    pub(crate) fn new_data_control() -> Result<Self, &'static str> {
+        #[cfg(target_os = "linux")]
+        {
+            wl_clipboard_rs::utils::is_primary_selection_supported()
+                .map_err(|_| "Native Wayland data-control unavailable; no fallback.")?;
+            Ok(Self {
+                backend: Backend::Wayland,
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        Err("Native Wayland data-control requires Linux; no fallback.")
+    }
+
     pub fn backend_name(&self) -> &'static str {
         match self.backend {
             #[cfg(target_os = "linux")]

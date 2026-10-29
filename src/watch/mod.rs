@@ -74,6 +74,18 @@ impl Watcher {
         Err("Native clipboard notifications are not implemented on this platform yet.")
     }
 
+    pub(crate) fn new_data_control() -> Result<Self, &'static str> {
+        #[cfg(target_os = "linux")]
+        {
+            Ok(Self {
+                backend: Backend::Wayland(Box::new(wayland::Watcher::new()?)),
+                _thread_bound: PhantomData,
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        Err("Native Wayland data-control watcher requires Linux; no fallback.")
+    }
+
     pub fn backend_name(&self) -> &'static str {
         match &self.backend {
             #[cfg(target_os = "linux")]
