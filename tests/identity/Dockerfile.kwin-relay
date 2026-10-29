@@ -1,0 +1,6 @@
+FROM our-clipboard-kwin-tests
+USER root
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    openssl python3 strace gnome-keyring dbus-x11 xvfb xauth \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /tmp

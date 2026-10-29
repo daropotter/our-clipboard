@@ -18,7 +18,7 @@ A [separately hosted relay](docs/RELAY-HOSTING.md), transport access credential 
 fingerprint confirmations are required. Signed events, original TTL and receiver
 ACKs remain active. Wait for both READY statuses before copying.
 An [experimental native Wayland data-control pilot](docs/WAYLAND-PILOT.md) is
-available by explicit opt-in, with a Sway↔X11 WSS fixture.
+available by explicit opt-in, with Sway↔X11 and KWin↔X11 WSS fixtures.
 The optional [SSH pilot](docs/PILOT.md) is available only where policy allows it.
 This is supervised testing. Relay pilots support an explicit local `--idle-file`
 Idle gate and a separate `--pause-file` session-ending action. Experimental

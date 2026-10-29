@@ -195,18 +195,37 @@ jobs:
             -v "$PWD/tests/identity/run-relay.sh:/run-signed-relay.sh:ro" \
             our-clipboard-signed-relay-tests bash /run-signed-relay.sh /pilot /helper
   wayland-relay-pilot:
+    name: wayland-relay-pilot (${{ matrix.compositor }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compositor: sway
+            image: our-clipboard-signed-relay-tests
+          - compositor: kwin
+            image: our-clipboard-kwin-relay-tests
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --locked --bin our-clipboard --example synthetic-clipboard-sync
-      - run: docker build -t our-clipboard-tests -f tests/linux/Dockerfile .
-      - run: docker build -t our-clipboard-relay-tests -f tests/linux/Dockerfile.relay .
-      - run: docker build -t our-clipboard-signed-relay-tests -f tests/identity/Dockerfile.relay .
-      - name: Experimental native Sway and X11 over WSS, signed identity and reconnect
+      - name: Sway fixture image
+        if: matrix.compositor == 'sway'
         run: |
-          docker run --rm --user tester --network none -e OUR_CLIPBOARD_TEST_WAYLAND=1 \
+          docker build -t our-clipboard-tests -f tests/linux/Dockerfile .
+          docker build -t our-clipboard-relay-tests -f tests/linux/Dockerfile.relay .
+          docker build -t our-clipboard-signed-relay-tests -f tests/identity/Dockerfile.relay .
+      - name: KWin fixture image
+        if: matrix.compositor == 'kwin'
+        run: |
+          docker build -t our-clipboard-kwin-tests -f tests/linux/Dockerfile.kwin .
+          docker build -t our-clipboard-kwin-relay-tests -f tests/identity/Dockerfile.kwin-relay .
+      - name: Experimental native Wayland and X11 over WSS, signed identity and reconnect
+        env:
+          OUR_CLIPBOARD_TEST_COMPOSITOR: ${{ matrix.compositor }}
+        run: |
+          docker run --rm --user tester --network none -e OUR_CLIPBOARD_TEST_WAYLAND=1 -e OUR_CLIPBOARD_TEST_COMPOSITOR \
             -v "$PWD/target/debug/our-clipboard:/pilot:ro" \
             -v "$PWD/target/debug/examples/synthetic-clipboard-sync:/helper:ro" \
             -v "$PWD/tests/linux/run-relay-pilot.py:/run-relay-pilot.py:ro" \
@@ -214,7 +233,7 @@ jobs:
             -v "$PWD/tests/identity/preflight_scenario.py:/preflight_scenario.py:ro" \
             -v "$PWD/tests/identity/peer_pin_scenario.py:/peer_pin_scenario.py:ro" \
             -v "$PWD/tests/identity/run-relay.sh:/run-signed-relay.sh:ro" \
-            our-clipboard-signed-relay-tests bash /run-signed-relay.sh /pilot /helper
+            ${{ matrix.image }} bash /run-signed-relay.sh /pilot /helper
   logind-idle:
     runs-on: ubuntu-24.04
     timeout-minutes: 10

@@ -56,8 +56,11 @@ and a new quiet period; a local control request is not process acknowledgement.
 
 ## Validation scope
 
-CI runs Sway 1.9 / wlroots 0.17 from Ubuntu 24.04 in a disposable headless
-compositor, against an independent Xvfb clipboard through a private WSS relay.
+CI runs Sway 1.9 / wlroots 0.17 from Ubuntu 24.04 and KWin 6.3.6 from
+Debian 13 (trixie) as separate disposable compositor fixtures. Each exchanges
+text with an independent Xvfb clipboard through a private WSS relay. KWin uses
+a virtual output and its own D-Bus session; this is not a Plasma lock-screen test.
+The same client opt-in and launch-file format apply to both compositors.
 It exercises both directions, multiline Unicode, same-text new copies, startup
 isolation, origin-marker echo suppression, Idle/Pause, signed application ACKs,
 original-TTL expiry and reconnect. A second pair of processes reloads OS-store
@@ -66,7 +69,7 @@ A reachable X11 server remains in the Wayland client's environment; syscall trac
 assert that client never connects to X11 or listens. Missing Wayland access is
 also checked with reachable X11 to prove there is no fallback.
 
-Native adapter tests on other compositors remain separate. KWin and GNOME pilot
+Native adapter tests on other compositors remain separate. GNOME pilot
 integration, physical Wayland↔macOS runs, system lock/suspend certification and
 background operation are not verified by this fixture. Other data-control
 compositors may work but are not certified here. A compositor can deny or revoke

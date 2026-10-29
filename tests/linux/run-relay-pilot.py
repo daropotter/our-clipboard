@@ -19,6 +19,7 @@ launch_config = os.environ.get("OUR_CLIPBOARD_TEST_LAUNCH_CONFIG") == "1"
 named_peers = os.environ.get("OUR_CLIPBOARD_TEST_NAMED_PEERS") == "1"
 enroll_peers = os.environ.get("OUR_CLIPBOARD_TEST_ENROLL_PEERS") == "1"
 signed_offers = os.environ.get("OUR_CLIPBOARD_TEST_SIGNED_OFFERS") == "1"
+compositor = os.environ.get("OUR_CLIPBOARD_TEST_COMPOSITOR", "sway")
 wayland_mode = os.environ.get("OUR_CLIPBOARD_TEST_WAYLAND") == "1"
 external = os.environ.get("OUR_CLIPBOARD_EXTERNAL_RELAY") == "1"
 if launch_config and not named_peers:
@@ -29,6 +30,8 @@ if signed_offers and external:
     raise SystemExit("Signed-offer fixtures require a private disposable keyring and relay")
 if wayland_mode and (external or logind_fixture or os.geteuid() == 0):
     raise SystemExit("Wayland fixture requires a disposable non-root container without external relay/logind")
+if compositor not in {"sway", "kwin"} or (compositor != "sway" and not wayland_mode):
+    raise SystemExit("Unsupported compositor fixture configuration")
 backend_env = {}
 relay_port = 8443 if external or wayland_mode else 443
 children = []
@@ -88,13 +91,23 @@ with tempfile.TemporaryDirectory() as directory:
             if wayland_mode and display == ":91":
                 runtime = root / "wayland-runtime"
                 runtime.mkdir(mode=0o700)
-                native = dict(os.environ, XDG_RUNTIME_DIR=str(runtime), XDG_SESSION_TYPE="wayland",
-                              WLR_BACKENDS="headless", WLR_LIBINPUT_NO_DEVICES="1", WLR_RENDERER="pixman")
+                native = dict(os.environ, XDG_RUNTIME_DIR=str(runtime), XDG_SESSION_TYPE="wayland")
                 native.pop("DISPLAY", None)
                 native.pop("WAYLAND_DISPLAY", None)
                 native.pop("WAYLAND_SOCKET", None)
-                display_workers[display] = spawn(["sway", "--unsupported-gpu", "--config", "/dev/null"],
-                                                 env=native, log=root / "compositor.log")
+                if compositor == "kwin":
+                    native.update(QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="software",
+                                  LIBGL_ALWAYS_SOFTWARE="1", KWIN_COMPOSE="Q", LANG="C.UTF-8")
+                    command = ["dbus-run-session", "--", "kwin_wayland", "--virtual", "--no-lockscreen",
+                               "--no-global-shortcuts", "--socket", "wayland-pilot"]
+                    version_command = ["kwin_wayland", "--version"]
+                else:
+                    native.update(WLR_BACKENDS="headless", WLR_LIBINPUT_NO_DEVICES="1", WLR_RENDERER="pixman")
+                    command = ["sway", "--unsupported-gpu", "--config", "/dev/null"]
+                    version_command = ["sway", "--version"]
+                version = subprocess.run(version_command, env=native, capture_output=True, timeout=5, check=True)
+                print("Native compositor fixture: " + version.stdout.decode().strip(), flush=True)
+                display_workers[display] = spawn(command, env=native, log=root / "compositor.log")
                 wait_for(lambda: any(p.is_socket() for p in runtime.glob("wayland-*")))
                 wayland_socket = next(p.name for p in runtime.glob("wayland-*") if p.is_socket())
                 # A valid X11 display deliberately remains reachable: fallback must not use it.
