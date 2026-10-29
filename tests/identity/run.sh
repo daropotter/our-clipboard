@@ -17,4 +17,10 @@ result = subprocess.run(
 if result.returncode:
     raise SystemExit('Could not initialize the disposable credential service')
 PY
-"$1" --ignored --test-threads=1
+if "$1" --ignored --test-threads=1; then
+    exit 0
+else
+    identity_test_status=$?
+fi
+python3 /credential_probe.py || true
+exit "$identity_test_status"

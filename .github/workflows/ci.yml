@@ -167,6 +167,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Private credential metadata probe tests
+        run: python3 -m unittest discover -s tests/identity -p 'test_credential_probe.py' -v
       - run: cargo build --locked --bin our-clipboard --example synthetic-clipboard-sync
       - run: docker build -t our-clipboard-tests -f tests/linux/Dockerfile .
       - run: docker build -t our-clipboard-relay-tests -f tests/linux/Dockerfile.relay .
