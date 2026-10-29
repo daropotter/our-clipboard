@@ -328,6 +328,9 @@ budget, not a real-time OS deadline. It may open a local X11 connection solely
 for the caller/display binding described below. Wayland sessions are rejected;
 there is no fallback to XWayland. This is a point-in-time observation, not a
 running-pilot acknowledgement, readiness check or physical lock certification.
+The private login1/X11 fixture checks foreign/missing user metadata, remote,
+Wayland and greeter sessions, and rejection of Wayland environment selection even
+with a reachable X11 server. These synthetic cases do not validate a real locker.
 
 A worker first resolves `GetSessionByPID` with the actual pilot PID. Some desktop
 terminals run under the user manager and have no direct logind session. In that
