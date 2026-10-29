@@ -339,7 +339,13 @@ poll about every 75 ms; samples older than 300 ms become Unknown/Idle. Freshness
 uses the native suspend-aware boot clock, timestamped **before** each query, so
 an old pre-suspend observation cannot acquire a new timestamp on return. These
 are scheduling bounds, not a real-time OS guarantee. A blocked worker cannot
-silently leave an indefinitely Active cache.
+silently leave an indefinitely Active cache. Entering/re-entering Active requires
+at least two consecutive fresh Active observations spanning at least 75 ms;
+confirmation is discarded after Idle, Unknown, missing/late data, a stale interval
+or clock regression. Idle/Unknown still take effect immediately when observed.
+A single Active pulse between non-active observations cannot resume clipboard
+work. This adds a conservative confirmation delay, not atomicity across separate
+D-Bus property queries or a guarantee about the physical lock state.
 
 Status lines distinguish `System session: Active`, `Idle` and `Unknown`. Unknown
 always gates the clipboard. A manual `--idle-file` marker combines with this gate
@@ -351,7 +357,7 @@ apply unchanged to system-driven Idle transitions.
 The monitor deliberately does not rebind to another service owner/session during
 a pilot. A login1 restart, bus loss or failed initial setup requires a fresh
 pilot; it does not grant automatic clipboard access. Ordinary property-query
-failures on the same live owner can recover after a new valid sample.
+failures on the same live owner can recover after fresh Active confirmation.
 
 **Deployment limitation:** `LockedHint` is cooperative desktop state, not an
 OS-enforced security barrier. Not every X11 locker updates it correctly. Querying
