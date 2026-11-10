@@ -39,6 +39,39 @@ unsafe extern "C" {
     fn IORegistryEntryCreateCFProperty(entry: u32, key: Ref, allocator: Ref, options: u32) -> Ref;
     fn IOObjectRelease(object: u32) -> c_int;
 }
+#[link(name = "bsm")]
+unsafe extern "C" {
+    fn audit_token_to_asid(token: mach2::message::audit_token_t) -> c_int;
+}
+fn process_audit_token() -> Option<mach2::message::audit_token_t> {
+    use mach2::{
+        kern_return::KERN_SUCCESS,
+        task::task_info,
+        task_info::{TASK_AUDIT_TOKEN, TASK_AUDIT_TOKEN_COUNT},
+    };
+    let mut token = mach2::message::audit_token_t::default();
+    let mut count = TASK_AUDIT_TOKEN_COUNT;
+    // SAFETY: self task port, exact audit-token storage and matching word count.
+    let result = unsafe {
+        task_info(
+            mach2::traps::mach_task_self(),
+            TASK_AUDIT_TOKEN,
+            (&mut token as *mut mach2::message::audit_token_t).cast(),
+            &mut count,
+        )
+    };
+    if result != KERN_SUCCESS || count != TASK_AUDIT_TOKEN_COUNT {
+        return None;
+    }
+    Some(token)
+}
+fn process_audit() -> Option<u32> {
+    let token = process_audit_token()?;
+    // SAFETY: public libbsm accessor receives a fully initialized kernel token.
+    let audit = unsafe { audit_token_to_asid(token) } as u32;
+    (audit != 0 && audit != u32::MAX).then_some(audit)
+}
+
 struct Owned(Ref);
 impl Owned {
     fn new(value: Ref) -> Option<Self> {
@@ -111,7 +144,11 @@ fn session() -> Option<Session> {
     }
     Some(Session {
         uid: number(property(&dictionary, "kCGSSessionUserIDKey")?)?,
-        console: number(property(&dictionary, "kCGSSessionConsoleSetKey")?)?,
+        console: match property(&dictionary, "kCGSSessionConsoleSetKey") {
+            Some(value) => Some(number(value)?),
+            None => None,
+        },
+        audit: number(property(&dictionary, "kCGSSessionAuditIDKey")?)?,
         on_console: boolean(property(&dictionary, "kCGSSessionOnConsoleKey")?)?,
         login_done: boolean(property(&dictionary, "kCGSessionLoginDoneKey")?)?,
         // A positive extra lock hint can only restrict access. Its absence is
@@ -136,18 +173,29 @@ fn locked() -> Option<bool> {
     boolean(value.0)
 }
 pub(super) fn read() -> Option<Observation> {
+    let process_before = process_audit()?;
     let before = session()?;
     let locked = locked()?;
     let after = session()?;
+    let process_after = process_audit()?;
     Some(Observation {
         before,
         after,
         locked,
+        process_before,
+        process_after,
     })
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_self_audit_token_is_available_without_clipboard_access() {
+        let token = process_audit_token().expect("Self task audit token unavailable");
+        // Exercise the native accessor without printing identifiers or assuming
+        // this CI process belongs to a Quartz login session.
+        let _audit = unsafe { audit_token_to_asid(token) };
+    }
     #[test]
     fn null_and_wrong_native_types_are_unknown() {
         assert_eq!(boolean(std::ptr::null()), None);

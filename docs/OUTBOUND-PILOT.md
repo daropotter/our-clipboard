@@ -250,16 +250,21 @@ state without pairing, network access or clipboard data access:
 
 It reports only Active/Idle, or exits with Unknown when the native schema cannot
 be verified. It never logs a session dictionary, username, UID or clipboard text.
-The diagnostic is macOS-only; other systems reject the pilot flag before offers
+This observer is macOS-only; other systems reject the pilot flag before offers
 or transport setup. Existing behavior is unchanged unless you opt in.
 
 A worker reads the **calling process's** Core Graphics session dictionary before
 and after an IOKit root-property lookup. The UID must match the effective UID,
 the two session snapshots must agree, login must be complete and the caller must
-be on console. UID/console-set binding is retained for that pilot; a different
-binding stays Unknown rather than silently rebinding. Console-set identifies
-hardware, not a cryptographic login identity; stop/restart pilots across logout
-or WindowServer replacement.
+be on console. The required numeric `kCGSSessionAuditIDKey` must match the calling
+process's kernel audit session ID, read with `task_info(TASK_AUDIT_TOKEN)` and
+libbsm before and after the observation. Missing/default IDs, lookup failures or
+mismatches stay Unknown. The UID/audit-session binding is pinned for that pilot;
+a different binding stays Unknown rather than silently rebinding. The numeric
+console-set field is an additional pinned check when present, but its absence
+is accepted: macOS 27.2 was observed to omit it. Wrong-typed console-set data or
+a change in its presence/value still fails closed. Stop/restart pilots across
+logout or WindowServer replacement; audit binding does not certify lock state.
 
 The IOKit `IOConsoleLocked` property must exist with exact CFBoolean type. Only
 an explicit false can permit Active. A present positive session lock hint also
@@ -304,6 +309,9 @@ check should a separately supervised synthetic-text pilot test exercise the gate
 
 Sources for the implemented distinction:
 
+- Apple's [task audit-token implementation](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/task.c)
+  supplies the caller's token; the SDK's `bsm/libbsm.h` declares the
+  `audit_token_to_asid` accessor. No audit identifiers are logged.
 - [CGSessionCopyCurrentDictionary](https://developer.apple.com/documentation/coregraphics/cgsessioncopycurrentdictionary())
   and [standard session properties](https://developer.apple.com/documentation/coregraphics/window-server-session-properties).
 - Apple's [IOKitKeysPrivate.h](https://github.com/apple-oss-distributions/xnu/blob/main/iokit/IOKit/IOKitKeysPrivate.h)
