@@ -11,7 +11,8 @@ const MAX_AGE_MS: u64 = 300;
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Session {
     uid: u32,
-    console: u32,
+    console: Option<u32>,
+    audit: u32,
     on_console: bool,
     login_done: bool,
     locked_hint: Option<bool>,
@@ -21,20 +22,28 @@ struct Observation {
     before: Session,
     after: Session,
     locked: bool,
+    process_before: u32,
+    process_after: u32,
 }
 #[derive(Default)]
 struct Policy {
-    binding: Option<(u32, u32)>,
+    binding: Option<(u32, u32, Option<u32>)>,
 }
 impl Policy {
     fn observe(&mut self, sample: Option<Observation>, uid: u32) -> State {
         let Some(sample) = sample else {
             return State::Unknown;
         };
-        if sample.before != sample.after || sample.after.uid != uid {
+        if sample.before != sample.after
+            || sample.after.uid != uid
+            || sample.after.audit == 0
+            || sample.after.audit == u32::MAX
+            || sample.process_before != sample.after.audit
+            || sample.process_after != sample.after.audit
+        {
             return State::Unknown;
         }
-        let current = (sample.after.uid, sample.after.console);
+        let current = (sample.after.uid, sample.after.audit, sample.after.console);
         if let Some(binding) = self.binding {
             if binding != current {
                 return State::Unknown;
@@ -133,7 +142,8 @@ mod tests {
     fn observation(locked: bool) -> Observation {
         let session = Session {
             uid: 1000,
-            console: 1,
+            console: Some(1),
+            audit: 42,
             on_console: true,
             login_done: true,
             locked_hint: None,
@@ -142,6 +152,8 @@ mod tests {
             before: session,
             after: session,
             locked,
+            process_before: 42,
+            process_after: 42,
         }
     }
     #[test]
@@ -177,13 +189,46 @@ mod tests {
             assert_eq!(p.observe(Some(o), 1000), State::Idle);
         }
         let mut racing = observation(false);
-        racing.after.console = 2;
+        racing.after.console = Some(2);
         assert_eq!(p.observe(Some(racing), 1000), State::Unknown);
         let mut changed = observation(false);
-        changed.before.console = 2;
-        changed.after.console = 2;
+        changed.before.console = Some(2);
+        changed.after.console = Some(2);
         assert_eq!(p.observe(Some(changed), 1000), State::Unknown);
     }
+    #[test]
+    fn absent_console_requires_a_matching_pinned_process_audit_session() {
+        let mut sample = observation(false);
+        sample.before.console = None;
+        sample.after.console = None;
+        let mut policy = Policy::default();
+        assert_eq!(policy.observe(Some(sample), 1000), State::Active);
+        sample.locked = true;
+        assert_eq!(policy.observe(Some(sample), 1000), State::Idle);
+        sample.locked = false;
+        for audit in [0, u32::MAX, 43] {
+            let mut changed = sample;
+            changed.before.audit = audit;
+            changed.after.audit = audit;
+            changed.process_before = audit;
+            changed.process_after = audit;
+            assert_eq!(policy.observe(Some(changed), 1000), State::Unknown);
+        }
+        // Reject a foreign or racing kernel audit observation, even on first use.
+        for (before, after) in [(43, 42), (42, 43), (43, 43)] {
+            let mut changed = sample;
+            changed.process_before = before;
+            changed.process_after = after;
+            assert_eq!(
+                Policy::default().observe(Some(changed), 1000),
+                State::Unknown
+            );
+        }
+        sample.after.console = Some(1);
+        sample.before.console = Some(1);
+        assert_eq!(policy.observe(Some(sample), 1000), State::Unknown);
+    }
+
     #[test]
     fn stalled_worker_suspend_and_clock_errors_stay_unknown() {
         let s = Snapshot {
